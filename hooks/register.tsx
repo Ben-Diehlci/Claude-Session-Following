@@ -774,13 +774,13 @@ export const register: Register = on => {
               return (
                 <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center" width="100%">
                   <Box width={20} flexShrink={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
-                  <Box flexGrow={1} flexShrink={1}>
+                  <Box flexShrink={0}>
                     {Svg
-                      ? <Svg source={usageBar(w.percent, 120, c)} alt={`${w.percent} percent of ${w.label} used`} width={120} height={6} />
+                      ? <Svg source={usageBar(w.percent, 140, c)} alt={`${w.percent} percent of ${w.label} used`} width={140} height={6} />
                       : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
                   </Box>
                   <Box width={5} flexShrink={0} justifyContent="flex-end"><Text size="caption" weight="medium" tabular>{`${w.percent}%`}</Text></Box>
-                  <Box width={18} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor tabular>{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
+                  <Box flexGrow={1} flexShrink={1}><Text size="caption" dimColor tabular wrap="truncate-end">{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
                 </Box>
               )
             })}
