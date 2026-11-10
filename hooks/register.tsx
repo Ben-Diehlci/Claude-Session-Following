@@ -522,7 +522,10 @@ export const register: Register = on => {
     const p = await read($, snap)
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
-    const recent = p.sessions.filter(s => s.isRunning || (Date.parse(s.lastActivityAt) || 0) >= cutoff)
+    const recent = p.sessions
+      .filter(s => s.isRunning || (Date.parse(s.lastActivityAt) || 0) >= cutoff)
+      // a session that is working again is not waiting on me, unless it is stuck on a permission prompt
+      .map(s => (s.waiting && s.isRunning && s.waiting.reason !== 'permission' ? { ...s, waiting: null } : s))
     const hidden = p.sessions.length - recent.length
     const groups = buildGroups(recent)
     const working = recent.filter(s => s.isRunning).length
@@ -543,14 +546,14 @@ export const register: Register = on => {
 
     // At most SHIMMER_MAX rows shimmer; the rest get still green text.
     let shimmering = 0
-    const title = (s: Sess) => {
+    const title = (s: Sess, k: string) => {
       const label = clip(s.isSelf ? `${s.title} (this one)` : s.title, 48)
       if (s.isRunning && Client) {
         const wave = shimmering < SHIMMER_MAX
         shimmering++
         return (
           <Client
-            key={`shim:${s.id}`}
+            key={`shim:${k}:${s.id}`}
             module="./shimmer.tsx"
             props={{ id: s.id, text: label, bright: GREEN_LIGHT, dim: GREEN, clickable: !!s.link, still: !wave } satisfies ShimmerProps}
           />
@@ -558,7 +561,7 @@ export const register: Register = on => {
       }
       if (s.link) {
         return (
-          <Button key={`open:${s.id}`} plain label={label} dimColor={!s.isRunning && !s.isSelf} onPress={() => void openSession($, s)} />
+          <Button key={`open:${k}:${s.id}`} plain label={label} dimColor={!s.isRunning && !s.isSelf} onPress={() => void openSession($, s)} />
         )
       }
       return <Text wrap="truncate-end" color={s.isRunning ? GREEN : undefined}>{label}</Text>
@@ -581,8 +584,8 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={1} alignItems="center">
           {depth > 0 && icon(CORNER, 'started by the session above', 12, '↳')}
           {statusIcon(s)}
-          <Box flexGrow={1} flexShrink={1}>{title(s)}</Box>
-          {pinned && s.waiting && chip(`r:${s.id}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
+          <Box flexGrow={1} flexShrink={1}>{title(s, pinned ? 'n' : 's')}</Box>
+          {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
           {s.remote && icon(PHONE, 'Remote Control on', 12, 'RC')}
           <Text dimColor size="caption" tabular>
             {pinned && s.waiting ? waitingFor(s.waiting, now) : ago(s.lastActivityAt, now)}
