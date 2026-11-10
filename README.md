@@ -80,31 +80,25 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 
 ## Install
 
-1. **Clone the repo** to any folder you like:
+The repo is its own plugin marketplace. Run these in a terminal:
 
-   ```bash
-   git clone https://github.com/Ben-Diehlci/Claude-Session-Following.git
-   ```
+```bash
+claude plugin marketplace add Ben-Diehlci/Claude-Session-Following
+```
 
-2. **Run the install script** from inside the folder:
+```bash
+claude plugin install session-following@claude-session-following
+```
 
-   ```bash
-   cd Claude-Session-Following
-   ```
+Or in the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `Ben-Diehlci/Claude-Session-Following`, then **Add plugin**.
 
-   ```bash
-   ./scripts/use-plugin-dir.sh
-   ```
+Then **quit and reopen the Claude app**, open a new session and type `/sessions`.
 
-   The script:
-   - backs up `~/.claude/settings.json` next to itself (`settings.json.bak-<date>`)
-   - adds this folder to `CLAUDE_CODE_PLUGIN_DIRS` in that file's `env` section, so every Claude session loads the mod straight from this folder
+**Getting updates automatically:** run `/plugin` in a terminal session, open **Marketplaces**, pick `claude-session-following` and turn on auto-update. It's off by default for marketplaces that aren't Anthropic's. Without it, see [Update or uninstall](#update-or-uninstall).
 
-3. **Quit and reopen the Claude app.**
+### Install from a clone (for working on the mod)
 
-4. **Open a new session.** The **Sessions** panel opens by itself. If it doesn't, type `/sessions` in the chat.
-
-> **Why not `/plugin install`?** A copy installed from a plugin marketplace can't reach the desktop app's session list, and shows *"no connected MCP tool list_sessions"*. Loading the mod as a plugin folder works. `scripts/install.sh` (the marketplace route) is kept for reference only.
+Clone the repo, then run `./scripts/use-plugin-dir.sh` from inside it. That backs up `~/.claude/settings.json` and adds the folder to `CLAUDE_CODE_PLUGIN_DIRS`, so every session loads the mod straight from the folder and your edits reload by themselves. Use either this or the marketplace install, not both.
 
 ---
 
@@ -193,8 +187,8 @@ The note clears as soon as you reply, or when the session ends.
 
 | You see | Fix |
 | --- | --- |
-| No Sessions panel | Type `/sessions`. If nothing happens, check that `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` points at this folder, then restart the app. |
-| *"Couldn't read sessions: ... no connected MCP tool list_sessions"* | The mod was installed from a marketplace. Run `claude plugin disable session-following@claude-session-following`, then `./scripts/use-plugin-dir.sh`, and restart the app. |
+| No Sessions panel | Type `/sessions`. If nothing happens, run `claude plugin list` and check that `session-following` shows as enabled, then restart the app. |
+| *"Couldn't read sessions: ... no connected MCP tool list_sessions"* | The panel only works in sessions the Claude desktop app runs, not in a plain terminal `claude` session. If you see it in the app, update to the latest version and restart the app. |
 | A session never turns amber | It was started before the install or restart. Open a new session. |
 | Amber "permission" when nothing is waiting | Reply in that session, or let its turn finish, to clear it. Please open an issue with that session's permission mode. |
 | Can't scroll with the pointer over the Clawd strip | Known limit: the animated strip is its own small frame. Move the pointer below it to scroll. |
@@ -204,17 +198,19 @@ The note clears as soon as you reply, or when the session ends.
 
 ## Update or uninstall
 
-**Update:** pull the latest changes. The mod reloads by itself, or you can restart the app.
+**Update (marketplace install):** with auto-update on, new versions arrive by themselves. Otherwise run these, then restart the app:
 
 ```bash
-git pull
+claude plugin marketplace update claude-session-following
 ```
-
-**Uninstall:** remove the folder from your settings (a backup is made first), then restart the app. You can then delete the cloned folder and `~/.claude/session-following/`.
 
 ```bash
-./scripts/remove-plugin-dir.sh
+claude plugin update session-following@claude-session-following
 ```
+
+**Update (clone):** run `git pull` in the folder. The mod reloads by itself.
+
+**Uninstall:** run `claude plugin uninstall session-following@claude-session-following` (or, for a clone, `./scripts/remove-plugin-dir.sh`), then restart the app. You can then delete `~/.claude/session-following/`.
 
 ---
 
