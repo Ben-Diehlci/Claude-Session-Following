@@ -293,6 +293,11 @@ async function markSeen($: EngineInterface, list: Sess[]): Promise<void> {
 const BUSY_REFRESH_MS = 30000
 const BUSY_MAX_AGE_MS = 90000
 let bgLast = { key: '', at: 0 }
+// Background shell commands (Bash run_in_background) this session started: they are
+// not agents, so $.agent.list() misses them. Added from the Bash result's task id,
+// removed when its task-notification arrives or Claude stops it; 6 h is a safety net.
+const BG_SHELL_MAX_AGE_MS = 6 * 3600000
+const bgShells = new Map<string, { toolUseId: string; label: string; at: number }>()
 
 async function bgCheck($: EngineInterface): Promise<void> {
   let running: { id: string; description: string; type: string }[] = []
@@ -301,8 +306,10 @@ async function bgCheck($: EngineInterface): Promise<void> {
   } catch {
     return
   }
-  const key = running.map(a => a.id).sort().join(',')
   const now = Date.now()
+  for (const [k, v] of bgShells) if (now - v.at > BG_SHELL_MAX_AGE_MS) bgShells.delete(k)
+  for (const [k, v] of bgShells) running.push({ id: k, description: v.label, type: 'shell' })
+  const key = running.map(a => a.id).sort().join(',')
   if (key === bgLast.key && (key === '' || now - bgLast.at < BUSY_REFRESH_MS)) return
   bgLast = { key, at: now }
   try {
@@ -689,6 +696,7 @@ export const register: Register = on => {
     ticker = null
     await writeFlag($, null)
     bgLast = { key: 'end', at: 0 }
+    bgShells.clear()
     try {
       const id = await getSelfId($)
       const dir = await baseDir($)
@@ -736,8 +744,20 @@ export const register: Register = on => {
     } else if (!e.agentId && e.tool.endsWith('wrap_up') && typeof args.ask === 'string' && args.ask) {
       wrapAsk = args.ask
     }
+    const stopId = e.tool === 'TaskStop'
+      ? (typeof args.task_id === 'string' ? args.task_id : typeof args.shell_id === 'string' ? args.shell_id : '')
+      : ''
     try {
-      return await next(e)
+      const out = await next(e)
+      const res = 'result' in out && isObj(out.result) ? out.result : null
+      if (e.tool === 'Bash' && res && !out.isError && typeof res.backgroundTaskId === 'string' && res.backgroundTaskId) {
+        const label = typeof args.description === 'string' && args.description ? args.description
+          : typeof args.command === 'string' ? args.command : 'background command'
+        bgShells.set(res.backgroundTaskId, { toolUseId: id, label: clip(label, 60), at: Date.now() })
+        void bgCheck($)
+      }
+      if (stopId && bgShells.delete(stopId)) void bgCheck($)
+      return out
     } finally {
       if (activeWaits.delete(id) && activeWaits.size === 0) void writeFlag($, null)
     }
@@ -766,6 +786,14 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'task-notification') {
+      // a background task finished: forget it, and do not treat this as me replying
+      const ids = [...e.text.matchAll(/<(?:task-id|tool-use-id)>\s*([^<\s]+)\s*<\//g)].map(m => m[1])
+      let hit = false
+      for (const [k, v] of bgShells) if (ids.includes(k) || ids.includes(v.toolUseId)) { bgShells.delete(k); hit = true }
+      if (hit) void bgCheck($)
+      return next(e)
+    }
     wrapAsk = ''
     // I replied here, so I've seen how it finished; the next turn end marks it again
     void getSelfId($).then(id => writeDone($, id, null))
@@ -885,7 +913,7 @@ export const register: Register = on => {
         s.effort ? small('e', s.effort) : null,
         s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
         s.bg > 0
-          ? small('bg', `${s.bg} helper${s.bg === 1 ? '' : 's'} working in background${s.bgLabel ? `: ${s.bgLabel}` : ''}`, GREEN)
+          ? small('bg', `${s.bg} background task${s.bg === 1 ? '' : 's'}${s.bgLabel ? `: ${s.bgLabel}` : ''}`, GREEN)
           : null,
         kids ? small('h', `${kids.n} helper${kids.n === 1 ? '' : 's'}${kids.w > 0 ? ` · ${kids.w} working` : ''}`) : null,
         s.branch ? small('b', s.branch) : null,

@@ -213,7 +213,7 @@ The note clears as soon as you reply, or when the session ends.
 - **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac.
 - **Writes:**
   - `~/.claude/session-following/waiting/<session-id>.json`, the "needs you" notes (one small file per session)
-  - `~/.claude/session-following/busy/<session-id>.json`, a note a session keeps while its helper agents still work after its own reply ended, so it shows as working ("1 helper working in background")
+  - `~/.claude/session-following/busy/<session-id>.json`, a note a session keeps while its helper agents or background commands still run after its own reply ended, so it shows as working ("1 background task")
   - `~/.claude/session-following/done/<session-id>.json`, the "finished" notes: when the turn ended, its last line, and whether you've seen it
   - `~/.claude/session-following/toasted/`, so the "is done" pop-up appears only once
   - your **Show per project** choice, in the mod's own settings store
