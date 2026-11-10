@@ -7,4 +7,4 @@ Open it with `/sessions`. It refreshes every 10 seconds and hides sessions idle 
 Private project. Notes: handoff.md, plan.md, todo.md.
 
 ## Install
-Run `scripts/install.sh` (adds this folder as the local marketplace `claude-session-following` and installs `session-following`), then restart the Claude app. Run it again after changes to update.
+Run `scripts/use-plugin-dir.sh` (adds this folder to CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json), then restart the Claude app. The marketplace route (`scripts/install.sh`) installs a copy that cannot reach the app's session tools, so it is not used.
