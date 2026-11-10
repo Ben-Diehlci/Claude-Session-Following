@@ -14,10 +14,10 @@ const IDLE_CACHE_MS = 120000
 const SHIMMER_MAX = 4
 const CHEER_MS = 10000
 const FLAG_MAX_AGE_MS = 24 * 3600 * 1000
-const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: null, cheerUntil: 0 }
+const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: [], cheerUntil: 0 }
 // Bump the tag when Snapshot changes: it declines what an earlier version stored.
 const snap = atom({ plugin: 'session-following', key: 'snap' } as const, EMPTY, {
-  shape: 'snap-2',
+  shape: 'snap-3',
 })
 const PER_GROUP_DEFAULT = 5
 const PER_GROUP_CHOICES = [3, 5, 10, 0]
@@ -45,7 +45,9 @@ let polling = false
 let lastPollAt = 0
 let ticker: Timer | null = null
 const prevRunning = new Map<string, boolean>()
-const detailCache = new Map<string, { at: number; parts: string[] }>()
+type Detail = { model: string; effort: string; branch: string; perm: string }
+const detailCache = new Map<string, { at: number; d: Detail }>()
+const runStart = new Map<string, number>()
 const activeWaits = new Set<string>()
 let wrapAsk = ''
 
@@ -64,7 +66,12 @@ function toSess(r: Raw, isSelf: boolean): Sess {
     remote: !!r.remoteControlActive,
     link: r.link ?? null,
     isSelf,
-    detail: '',
+    model: '',
+    effort: '',
+    branch: '',
+    perm: '',
+    ctx: null,
+    workingSince: 0,
     waiting: null,
   }
 }
@@ -132,12 +139,9 @@ function branchOf(o: Obj): string {
   return ''
 }
 
-function detailParts(o: Obj): string[] {
-  const parts: string[] = []
-  if (typeof o.model === 'string' && o.model) parts.push(shortModel(o.model))
-  if (typeof o.effort === 'string' && o.effort) parts.push(o.effort)
-  if (typeof o.permissionMode === 'string' && o.permissionMode) parts.push(o.permissionMode)
-  return parts
+function detailOf(o: Obj): Detail {
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  return { model: str(o.model), effort: str(o.effort), branch: branchOf(o), perm: str(o.permissionMode) }
 }
 
 type UsageRes = {
@@ -145,11 +149,14 @@ type UsageRes = {
   context?: { status?: string; percentUsed?: number }
 }
 
-function planUsage(u: UsageRes | null): Usage | null {
-  if (!u || !u.plan || u.plan.status !== 'ok' || !Array.isArray(u.plan.windows)) return null
-  const w = u.plan.windows.find(x => typeof x.label === 'string' && x.label.toLowerCase().startsWith('5-hour'))
-  if (!w || typeof w.percentUsed !== 'number') return null
-  return { percent: Math.round(w.percentUsed), resetsIn: typeof w.resetsIn === 'string' ? w.resetsIn : '' }
+function planUsage(u: UsageRes | null): Usage[] {
+  if (!u || !u.plan || u.plan.status !== 'ok' || !Array.isArray(u.plan.windows)) return []
+  const out: Usage[] = []
+  for (const w of u.plan.windows) {
+    if (typeof w.label !== 'string' || typeof w.percentUsed !== 'number') continue
+    out.push({ label: w.label, percent: Math.round(w.percentUsed), resetsIn: typeof w.resetsIn === 'string' ? w.resetsIn : '' })
+  }
+  return out
 }
 
 function ctxPercent(u: UsageRes | null): number | null {
@@ -252,13 +259,13 @@ async function poll($: EngineInterface): Promise<void> {
       await Promise.all(
         need.slice(i, i + 5).map(async s => {
           const o = await callJson<Obj>($, 'get_session', { session_id: s.id })
-          if (o) detailCache.set(s.id, { at: Date.now(), parts: [...detailParts(o), branchOf(o)].filter(Boolean) })
+          if (o) detailCache.set(s.id, { at: Date.now(), d: detailOf(o) })
         }),
       )
     }
     if (selfRaw) {
       const self = rows.find(r => r.isSelf)
-      if (self) detailCache.set(self.id, { at: now, parts: [...detailParts(selfRaw), branchOf(selfRaw)].filter(Boolean) })
+      if (self) detailCache.set(self.id, { at: now, d: detailOf(selfRaw) })
     }
     const ctx = new Map<string, number>()
     const sp = ctxPercent(usageSelf)
@@ -272,11 +279,22 @@ async function poll($: EngineInterface): Promise<void> {
         }),
       )
     }
+    const prev = await read($, snap)
+    if (runStart.size === 0) for (const s of prev.sessions) if (s.workingSince) runStart.set(s.id, s.workingSince)
     for (const s of rows) {
-      const parts = [...(detailCache.get(s.id)?.parts ?? [])]
+      const d = detailCache.get(s.id)?.d
+      if (d) {
+        s.model = d.model
+        s.effort = d.effort
+        s.branch = d.branch
+        s.perm = d.perm
+      }
       const c = ctx.get(s.id)
-      if (s.isRunning && c !== undefined) parts.splice(Math.min(3, parts.length), 0, `context ${c}%`)
-      s.detail = parts.join(' · ')
+      s.ctx = s.isRunning && c !== undefined ? c : null
+      if (s.isRunning) {
+        if (!runStart.has(s.id)) runStart.set(s.id, now)
+        s.workingSince = runStart.get(s.id) ?? now
+      } else runStart.delete(s.id)
       s.waiting = flags.get(s.id) ?? null
     }
 
@@ -290,11 +308,15 @@ async function poll($: EngineInterface): Promise<void> {
       }
       prevRunning.set(s.id, s.isRunning)
     }
-    const prev = await read($, snap)
     const cheerUntil = finished > 0 ? now + CHEER_MS : prev.cheerUntil
-    await update($, snap, () => ({ checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil }))
+    const next: Snapshot = { checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil }
+    // Redraw only when something changed (or about once a minute for the clock texts):
+    // fewer redraws, and less chance of disturbing the person's scrolling.
+    const same = (x: Snapshot) => JSON.stringify([x.sessions, x.error, x.usage, x.cheerUntil])
+    const fresh = prev.checkedAt !== '' && now - Date.parse(prev.checkedAt) < 50000
+    if (!(fresh && same(prev) === same(next))) await update($, snap, () => next)
   } catch (err) {
-    await update($, snap, s => ({ ...s, checkedAt, error: String(err).slice(0, 300) }))
+    await update($, snap, s => (s.error === String(err).slice(0, 300) ? s : { ...s, checkedAt, error: String(err).slice(0, 300) }))
   } finally {
     polling = false
   }
@@ -408,14 +430,38 @@ const PHONE = svg(12, 12, `<rect x="3" y="1" width="6" height="10" rx="1.3" fill
 const ROW_HOVER = 'rgba(128,128,128,0.12)'
 const GROUP_BG = 'rgba(128,128,128,0.07)'
 const GROUP_HEAD_BG = 'rgba(128,128,128,0.10)'
-const TIME_W = 36
-const RC_W = 14
+const TIME_W = 40
+const RC_W = 44
+const MODEL_STYLE: Record<string, { bg: string; fg: string }> = {
+  opus: { bg: 'rgba(216,90,48,0.16)', fg: '#993C1D' },
+  sonnet: { bg: 'rgba(55,138,221,0.16)', fg: '#185FA5' },
+  fable: { bg: 'rgba(127,119,221,0.18)', fg: '#534AB7' },
+  haiku: { bg: 'rgba(29,158,117,0.16)', fg: '#0F6E56' },
+}
+const MODEL_OTHER = { bg: 'rgba(128,128,128,0.16)', fg: '#5F5E5A' }
+const modelStyle = (id: string) => MODEL_STYLE[/^claude-([a-z]+)/.exec(id)?.[1] ?? ''] ?? MODEL_OTHER
+const PERM_INK = '#5F5E5A'
+const pst = (d: string, c = PERM_INK) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`
+// Permission mode icons, 12x12.
+const PERM_ICON: Record<string, { svg: string; label: string; glyph: string }> = {
+  auto: { svg: svg(12, 12, pst('M7 1 3 6.8h2.6L5 11l4-6H6.4z')), label: 'Auto mode', glyph: '⚡' },
+  acceptEdits: { svg: svg(12, 12, pst('M2 10l.5-2.5L8.5 1.5l2 2-6 6zM7.3 2.7l2 2')), label: 'Accept edits', glyph: '✎' },
+  plan: { svg: svg(12, 12, pst('M2.5 2h7v8h-7zM4.3 4.5h3.4M4.3 6.5h3.4M4.3 8.3h2')), label: 'Plan mode', glyph: '☰' },
+  default: { svg: svg(12, 12, pst('M6 1 2 2.6V6c0 2.3 1.7 4 4 5 2.3-1 4-2.7 4-5V2.6z')), label: 'Asks before acting', glyph: '◇' },
+  bypassPermissions: { svg: svg(12, 12, pst('M6 1.2 11 10H1zM6 4.5v2.6M6 8.6v.1', '#C9561E')), label: 'Bypass permissions', glyph: '⚠' },
+}
+const ctxColor = (p: number) => (p > 85 ? RED : p >= 65 ? AMBER : GREEN)
+const dur = (ms: number) => {
+  const m = Math.max(0, Math.round(ms / 60000))
+  return m < 1 ? '<1m' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`
+}
 const SELF_BG = 'rgba(55,138,221,0.14)'
 const CHIP_GREEN = 'rgba(29,158,117,0.14)'
 const CHIP_GREY = 'rgba(128,128,128,0.12)'
 const CHIP_AMBER = 'rgba(239,159,39,0.2)'
 const NEED_BG = 'rgba(239,159,39,0.1)'
 
+const LEGEND_PERMS = ['auto', 'acceptEdits', 'plan', 'default', 'bypassPermissions']
 const REASON: Record<WaitReason, string> = { permission: 'permission', question: 'question', turn: 'your turn' }
 
 function waitingFor(w: Waiting, now: number): string {
@@ -553,7 +599,7 @@ export const register: Register = on => {
 
     const mood: Mood =
       needing.length > 0 ? 'waving'
-      : p.error !== null || (p.usage?.percent ?? 0) > 80 ? 'worried'
+      : p.error !== null || (p.usage.find(x => x.label.toLowerCase().startsWith('5-hour'))?.percent ?? 0) > 80 ? 'worried'
       : p.cheerUntil > now ? 'cheering'
       : working > 0 ? 'busy'
       : 'asleep'
@@ -583,11 +629,46 @@ export const register: Register = on => {
     }
 
     const statusIcon = (s: Sess) =>
-      s.waiting ? (Svg ? <Svg source={pulseDot(AMBER)} alt="needs you" width={10} height={10} isInteractive /> : <Text color="warning">●</Text>)
+      s.waiting ? (Svg ? <Svg source={pulseDot(AMBER)} alt="needs you" width={10} height={10} /> : <Text color="warning">●</Text>)
       : s.isRunning ? mini('busy')
       : icon(DOT_IDLE, 'idle', 10, '○')
 
-    const row = (s: Sess, depth: number, key: string, pinned: boolean) => (
+    // helpers: descendants of each parent, counted from the groups' depth-first order
+    const helpers = new Map<string, { n: number; w: number }>()
+    for (const g of groups) {
+      g.items.forEach(({ s, depth }, i) => {
+        let n = 0
+        let w = 0
+        for (let j = i + 1; j < g.items.length; j++) {
+          const it = g.items[j]
+          if (!it || it.depth <= depth) break
+          n++
+          if (it.s.isRunning) w++
+        }
+        if (n > 0) helpers.set(s.id, { n, w })
+      })
+    }
+
+    const permIcon = (perm: string) => {
+      const pi = PERM_ICON[perm]
+      if (!pi) return <Text size="caption" dimColor>{perm}</Text>
+      return icon(pi.svg, pi.label, 12, pi.glyph)
+    }
+
+    const row = (s: Sess, depth: number, key: string, pinned: boolean) => {
+      const ms = s.model ? modelStyle(s.model) : null
+      const h = helpers.get(s.id)
+      const small = (k: string, text: string, color?: string) => (
+        <Text key={`${k}:${key}`} size="caption" dimColor={!color} color={color}>{text}</Text>
+      )
+      const bits = [
+        s.effort ? small('e', s.effort) : null,
+        s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
+        h ? small('h', `${h.n} helper${h.n === 1 ? '' : 's'}${h.w > 0 ? ` · ${h.w} working` : ''}`) : null,
+        s.branch ? small('b', s.branch) : null,
+      ].filter(Boolean)
+      const hasDetail = !!ms || !!s.perm || s.ctx !== null || bits.length > 0
+      return (
       <Box
         key={key}
         flexDirection="column"
@@ -611,50 +692,78 @@ export const register: Register = on => {
         {pinned && s.waiting?.question ? (
           <Box paddingLeft={3}><Text size="caption" color="warning" wrap="truncate-end">{s.waiting.question}</Text></Box>
         ) : null}
-        {s.detail ? (
-          <Box paddingLeft={3}><Text size="caption" dimColor wrap="truncate-end">{s.detail}</Text></Box>
+        {hasDetail ? (
+          <Box paddingLeft={3} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+            {ms ? chip(`m:${key}`, ms.bg, ms.fg, shortModel(s.model)) : null}
+            {s.perm ? <Box key={`p:${key}`}>{permIcon(s.perm)}</Box> : null}
+            {s.ctx !== null ? (
+              <Box key={`x:${key}`} flexDirection="row" gap={1} alignItems="center">
+                {Svg ? <Svg source={usageBar(s.ctx, 40, ctxColor(s.ctx))} alt={`${s.ctx} percent of context used`} width={40} height={6} /> : null}
+                <Text size="caption" dimColor tabular>{Svg ? `${s.ctx}%` : `ctx ${s.ctx}%`}</Text>
+              </Box>
+            ) : null}
+            {bits}
+          </Box>
         ) : null}
       </Box>
-    )
+      )
+    }
 
-    const pct = p.usage?.percent ?? 0
-    const barColor = pct > 80 ? RED : pct >= 60 ? AMBER : GREEN
+    const five = p.usage.find(x => x.label.toLowerCase().startsWith('5-hour')) ?? null
+    const longest = needing[0]?.waiting ?? null
 
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
-            {Svg ? <Svg source={clawd(mood, 32, 24)} alt={`Clawd, ${mood}`} width={32} height={24} isInteractive /> : null}
+            {Svg ? <Svg source={clawd(mood, 32, 24)} alt={`Clawd, ${mood}`} width={32} height={24} /> : null}
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
           </Box>
           <Button key="refresh" label="Refresh" plain dimColor onPress={() => void poll($)} />
         </Box>
-        {p.usage !== null && (
-          <Box flexDirection="row" gap={1} alignItems="center">
-            <Text size="caption" dimColor>5-hour limit</Text>
-            {Svg
-              ? <Svg source={usageBar(pct, 90, barColor)} alt={`${pct} percent of the 5-hour limit used`} width={90} height={6} />
-              : <Text size="caption" color={barColor}>{'█'.repeat(Math.round(pct / 10)) + '░'.repeat(10 - Math.round(pct / 10))}</Text>}
-            <Text size="caption" dimColor tabular>{`${pct}%${p.usage.resetsIn ? ` · resets in ${p.usage.resetsIn}` : ''}`}</Text>
+        {longest && (
+          <Text size="caption" color="warning">{`longest waiting: ${dur(now - Date.parse(longest.since))}`}</Text>
+        )}
+        {p.usage.length > 0 && (
+          <Box flexDirection="row" gap={3} alignItems="center" flexWrap="wrap">
+            {[...p.usage].sort((a, b) => Number(b.label.toLowerCase().startsWith('5-hour')) - Number(a.label.toLowerCase().startsWith('5-hour'))).map((w, i) => {
+              const c = w.percent > 80 ? RED : w.percent >= 60 ? AMBER : GREEN
+              return (
+                <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center">
+                  <Text size="caption" dimColor>{w.label}</Text>
+                  {Svg
+                    ? <Svg source={usageBar(w.percent, 60, c)} alt={`${w.percent} percent of ${w.label} used`} width={60} height={6} />
+                    : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
+                  <Text size="caption" dimColor tabular>{`${w.percent}%${w.resetsIn ? ` · resets in ${w.resetsIn}` : ''}`}</Text>
+                </Box>
+              )
+            })}
           </Box>
         )}
         {p.error !== null && <Text color="error">{`Couldn't read sessions: ${p.error}`}</Text>}
         {p.checkedAt === '' && <Text dimColor>Loading sessions…</Text>}
         {p.checkedAt !== '' && recent.length === 0 && p.error === null && (
           <Box flexDirection="column" alignItems="center" gap={1}>
-            {Svg ? <Svg source={clawd('asleep', 64, 48)} alt="Clawd asleep" width={64} height={48} isInteractive /> : null}
+            {Svg ? <Svg source={clawd('asleep', 64, 48)} alt="Clawd asleep" width={64} height={48} /> : null}
             <Text dimColor>All quiet</Text>
           </Box>
         )}
         {needing.length > 0 && (
           <Box flexDirection="column">
             <Box flexDirection="row" gap={1} alignItems="center">
-              {Svg ? <Svg source={pulseDot(AMBER)} alt="" width={10} height={10} isInteractive /> : <Text color="warning">●</Text>}
+              {Svg ? <Svg source={pulseDot(AMBER)} alt="" width={10} height={10} /> : <Text color="warning">●</Text>}
               <Text size="footnote" weight="medium" color="warning">Needs you</Text>
             </Box>
             {needing.map(s => row(s, 0, `n:${s.id}`, true))}
+          </Box>
+        )}
+        {groups.length > 0 && (
+          <Box flexDirection="row" gap={1} alignItems="center" paddingX={1}>
+            <Box flexGrow={1} flexShrink={1} />
+            <Box width={RC_W} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor>Remote</Text></Box>
+            <Box width={TIME_W} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor>Active</Text></Box>
           </Box>
         )}
         {groups.map(g => {
@@ -687,6 +796,7 @@ export const register: Register = on => {
                 </Box>
                 {need > 0 && chip(`gn:${g.key}`, CHIP_AMBER, 'warning', `${need} need you`)}
                 {busy > 0 && chip(`gw:${g.key}`, CHIP_GREEN, 'success', `${busy} working`)}
+                <Box width={RC_W} flexShrink={0} />
                 <Box width={TIME_W} flexShrink={0} justifyContent="flex-end">
                   <Text size="caption" dimColor tabular>{String(g.items.length)}</Text>
                 </Box>
@@ -731,6 +841,12 @@ export const register: Register = on => {
           <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, '', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{Svg ? <Svg source={pulseDot(AMBER)} alt="" width={10} height={10} /> : <Text color="warning">●</Text>}<Text size="caption" dimColor>Needs you</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{icon(PHONE, '', 12, 'RC')}<Text size="caption" dimColor>Remote</Text></Box>
+          {LEGEND_PERMS.map(k => {
+            const pi = PERM_ICON[k]
+            return pi ? (
+              <Box key={`lp:${k}`} flexDirection="row" gap={1} alignItems="center">{icon(pi.svg, '', 12, pi.glyph)}<Text size="caption" dimColor>{pi.label}</Text></Box>
+            ) : null
+          })}
           <Text size="caption" dimColor>
             {`${hidden > 0 ? `${hidden} older hidden · ` : ''}updated ${p.checkedAt ? ago(p.checkedAt, now) : '—'}`}
           </Text>

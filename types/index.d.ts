@@ -16,12 +16,21 @@ export type Sess = {
   remote: boolean
   link: string | null
   isSelf: boolean
-  /** Dim caption under the title: model, effort, permission mode, context, branch. */
-  detail: string
+  /** Raw model id (claude-opus-5-5), or empty. */
+  model: string
+  effort: string
+  branch: string
+  /** Permission mode; get_session reports it only for the calling session and sessions it started. */
+  perm: string
+  /** Context used, percent, for working sessions; null when unavailable. */
+  ctx: number | null
+  /** Epoch ms when this mod first saw the session running; 0 when idle. */
+  workingSince: number
   waiting: Waiting | null
 }
 
 export type Usage = {
+  label: string
   percent: number
   resetsIn: string
 }
@@ -30,8 +39,8 @@ export type Snapshot = {
   checkedAt: string
   sessions: Sess[]
   error: string | null
-  /** 5-hour plan window, or null when the plan limits are not readable. */
-  usage: Usage | null
+  /** Every plan window (5-hour, weekly...), empty when the plan limits are not readable. */
+  usage: Usage[]
   /** Epoch ms until which Clawd cheers (a session just finished). */
   cheerUntil: number
 }
