@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, EngineInterface, Timer } from 'claude-code'
 
-import type { Sess, Snapshot, Usage, Waiting, WaitReason } from '../types'
+import type { View, Sess, Snapshot, Usage, Waiting, WaitReason } from '../types'
 import { clawd, pulseDot, usageBar, type Mood } from './clawd'
 import type { ShimmerProps } from './shimmer'
 
@@ -19,6 +19,12 @@ const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: null,
 const snap = atom({ plugin: 'session-following', key: 'snap' } as const, EMPTY, {
   shape: 'snap-2',
 })
+const PER_GROUP_DEFAULT = 5
+const PER_GROUP_CHOICES = [3, 5, 10, 0]
+const view = atom({ plugin: 'session-following', key: 'view' } as const, { perGroup: PER_GROUP_DEFAULT, expanded: [], collapsed: [] } as View, {
+  shape: 'view-1',
+})
+const toggle = (list: string[], k: string) => (list.includes(k) ? list.filter(x => x !== k) : [...list, k])
 
 type Raw = {
   sessionId?: string
@@ -400,6 +406,10 @@ const FOLDER = svg(14, 14, `<path d="M1.5 3.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 
 const CORNER = svg(12, 12, `<path d="M3 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5H10M7.5 6l2.5 2.5L7.5 11" fill="none" stroke="${GREY}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`)
 const PHONE = svg(12, 12, `<rect x="3" y="1" width="6" height="10" rx="1.3" fill="none" stroke="${GREY}" stroke-width="1.1"/><path d="M5.3 9.2h1.4" stroke="${GREY}" stroke-width="1.1" stroke-linecap="round"/>`)
 const ROW_HOVER = 'rgba(128,128,128,0.12)'
+const GROUP_BG = 'rgba(128,128,128,0.07)'
+const GROUP_HEAD_BG = 'rgba(128,128,128,0.10)'
+const TIME_W = 36
+const RC_W = 14
 const SELF_BG = 'rgba(55,138,221,0.14)'
 const CHIP_GREEN = 'rgba(29,158,117,0.14)'
 const CHIP_GREY = 'rgba(128,128,128,0.12)'
@@ -429,6 +439,10 @@ export const register: Register = on => {
     await $.command.register({ name: 'sessions', description: 'Open the Sessions pane' })
     void $.ui.open({ id: PANE, title: 'Sessions' })
     void getSelfId($)
+    void (async () => {
+      const saved = await $.store.get('perGroup').catch(() => undefined)
+      if (typeof saved === 'number') await update($, view, v => ({ ...v, perGroup: saved }))
+    })()
     ticker?.cancel()
     // A cheap local check (is the pane drawn?); the session list is read only while it is.
     ticker = $.clock.every(CHECK_MS, () => tick($))
@@ -520,6 +534,7 @@ export const register: Register = on => {
     const icon = (source: string, alt: string, size: number, glyph: string, color?: string) =>
       Svg ? <Svg source={source} alt={alt} width={size} height={size} /> : <Text color={color} dimColor={!color}>{glyph}</Text>
     const p = await read($, snap)
+    const v = await read($, view)
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
     const recent = p.sessions
@@ -561,7 +576,7 @@ export const register: Register = on => {
       }
       if (s.link) {
         return (
-          <Button key={`open:${k}:${s.id}`} plain label={label} dimColor={!s.isRunning && !s.isSelf} onPress={() => void openSession($, s)} />
+          <Button key={`open:${k}:${s.id}`} plain label={label} onPress={() => void openSession($, s)} />
         )
       }
       return <Text wrap="truncate-end" color={s.isRunning ? GREEN : undefined}>{label}</Text>
@@ -586,10 +601,12 @@ export const register: Register = on => {
           {statusIcon(s)}
           <Box flexGrow={1} flexShrink={1}>{title(s, pinned ? 'n' : 's')}</Box>
           {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
-          {s.remote && icon(PHONE, 'Remote Control on', 12, 'RC')}
-          <Text dimColor size="caption" tabular>
-            {pinned && s.waiting ? waitingFor(s.waiting, now) : ago(s.lastActivityAt, now)}
-          </Text>
+          <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>
+          <Box width={pinned && s.waiting ? TIME_W + 30 : TIME_W} flexShrink={0} justifyContent="flex-end">
+            <Text dimColor size="caption" tabular>
+              {pinned && s.waiting ? waitingFor(s.waiting, now) : ago(s.lastActivityAt, now)}
+            </Text>
+          </Box>
         </Box>
         {pinned && s.waiting?.question ? (
           <Box paddingLeft={3}><Text size="caption" color="warning" wrap="truncate-end">{s.waiting.question}</Text></Box>
@@ -640,20 +657,75 @@ export const register: Register = on => {
             {needing.map(s => row(s, 0, `n:${s.id}`, true))}
           </Box>
         )}
-        {groups.map(g => (
-          <Box key={`g:${g.key}`} flexDirection="column">
-            <Box flexDirection="row" gap={1} alignItems="center" paddingBottom={0}>
-              {icon(FOLDER, '', 14, '▸')}
-              <Box flexGrow={1} flexShrink={1}>
-                <Text size="footnote" weight="medium" dimColor wrap="truncate-end">
-                  {g.area ? `${g.name}  ·  ${g.area}` : g.name}
-                </Text>
+        {groups.map(g => {
+          const isCollapsed = v.collapsed.includes(g.key)
+          const isExpanded = v.expanded.includes(g.key)
+          const limit = v.perGroup > 0 && !isExpanded ? v.perGroup : Infinity
+          // working and waiting sessions always show; the rest fill up to the limit
+          let room = limit
+          const shown = g.items.filter(({ s }) => {
+            if (s.isRunning || s.waiting || s.isSelf) return true
+            if (room > 0) { room--; return true }
+            return false
+          })
+          const extra = g.items.length - shown.length
+          const busy = g.items.filter(({ s }) => s.isRunning).length
+          const need = g.items.filter(({ s }) => s.waiting).length
+          return (
+            <Box key={`g:${g.key}`} flexDirection="column" backgroundColor={GROUP_BG} paddingBottom={isCollapsed ? 0 : 1}>
+              <Box flexDirection="row" gap={1} alignItems="center" backgroundColor={GROUP_HEAD_BG} paddingX={1} paddingY={1}>
+                <Button
+                  key={`fold:${g.key}`}
+                  plain
+                  label={isCollapsed ? '▸' : '▾'}
+                  onPress={() => void update($, view, x => ({ ...x, collapsed: toggle(x.collapsed, g.key) }))}
+                />
+                {icon(FOLDER, '', 14, '')}
+                <Box flexGrow={1} flexShrink={1} flexDirection="row" gap={1} alignItems="center">
+                  <Text weight="semibold" wrap="truncate-end">{g.name}</Text>
+                  {g.area ? <Text size="caption" dimColor wrap="truncate-end">{g.area}</Text> : null}
+                </Box>
+                {need > 0 && chip(`gn:${g.key}`, CHIP_AMBER, 'warning', `${need} need you`)}
+                {busy > 0 && chip(`gw:${g.key}`, CHIP_GREEN, 'success', `${busy} working`)}
+                <Box width={TIME_W} flexShrink={0} justifyContent="flex-end">
+                  <Text size="caption" dimColor tabular>{String(g.items.length)}</Text>
+                </Box>
               </Box>
-              <Text size="caption" dimColor tabular>{String(g.items.length)}</Text>
+              {!isCollapsed && shown.map(({ s, depth }) => row(s, depth, `s:${s.id}`, false))}
+              {!isCollapsed && (extra > 0 || isExpanded) && (
+                <Box paddingLeft={3}>
+                  <Button
+                    key={`more:${g.key}`}
+                    plain
+                    dimColor
+                    label={isExpanded ? 'Show less' : `Show ${extra} more`}
+                    onPress={() => void update($, view, x => ({ ...x, expanded: toggle(x.expanded, g.key) }))}
+                  />
+                </Box>
+              )}
             </Box>
-            {g.items.map(({ s, depth }) => row(s, depth, `s:${s.id}`, false))}
-          </Box>
-        ))}
+          )
+        })}
+        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Text size="caption" dimColor>Show per project:</Text>
+          {PER_GROUP_CHOICES.map(n => {
+            const label = n === 0 ? 'All' : String(n)
+            return v.perGroup === n
+              ? <Text key={`pg:${n}`} size="caption" weight="semibold">{`[${label}]`}</Text>
+              : (
+                <Button
+                  key={`pg:${n}`}
+                  plain
+                  dimColor
+                  label={label}
+                  onPress={() => {
+                    void update($, view, x => ({ ...x, perGroup: n, expanded: [] }))
+                    void $.store.set('perGroup', n)
+                  }}
+                />
+              )
+          })}
+        </Box>
         <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
           <Box flexDirection="row" gap={1} alignItems="center">{mini('busy')}<Text size="caption" dimColor>Working</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, '', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>

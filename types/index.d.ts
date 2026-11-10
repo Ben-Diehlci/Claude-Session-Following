@@ -36,8 +36,14 @@ export type Snapshot = {
   cheerUntil: number
 }
 
+export type View = {
+  perGroup: number
+  expanded: string[]
+  collapsed: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'session-following': { snap: Shaped<Snapshot> }
+    'session-following': { snap: Shaped<Snapshot>; view: Shaped<View> }
   }
 }
