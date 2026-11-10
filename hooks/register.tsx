@@ -3,7 +3,7 @@ import type { Register, EngineInterface, Timer } from 'claude-code'
 
 import type { View, Sess, Snapshot, Usage, Waiting, WaitReason } from '../types'
 import { clawd, pulseDot, usageBar, type Mood } from './clawd'
-import { stageSvg, stageText } from './stage'
+import { stageSvg, stageText, type StageInput } from './stage'
 import type { ShimmerProps } from './shimmer'
 
 const PANE = 'session-following'
@@ -500,6 +500,18 @@ function toolBrief(tool: string, input: unknown): string {
   return typeof v === 'string' ? `${tool}: ${clip(v, 100)}` : tool
 }
 
+// The stage picture is rebuilt only when what it shows changes (who works, who waits,
+// cheering, hot). Handing the app the same markup on a refresh leaves the running
+// animation alone; new markup restarts it, which made the walking Clawd jump.
+let stageCache: { key: string; svg: string } | null = null
+function stableStage(input: StageInput): string {
+  const key = JSON.stringify({ w: input.working, n: input.waiting, c: input.cheerTitle, h: input.hot })
+  if (stageCache && stageCache.key === key) return stageCache.svg
+  const svg = stageSvg(input)
+  stageCache = { key, svg }
+  return svg
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'sessions', description: 'Open the Sessions pane' })
@@ -761,7 +773,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {Svg
-          ? <Svg key="stage" source={stageSvg(stageIn)} alt={stageText(stageIn)} />
+          ? <Svg key="stage" source={stableStage(stageIn)} alt={stageText(stageIn)} />
           : <Text key="stage" dimColor>{stageText(stageIn)}</Text>}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
