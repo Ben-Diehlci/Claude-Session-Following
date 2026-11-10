@@ -226,6 +226,15 @@ claude plugin update session-following@claude-session-following
 | `types/index.d.ts` | The shape of the mod's saved state |
 | `scripts/stage-selfcheck.mjs` | Draws every stage scene and checks the SVG is well formed |
 | `scripts/make-docs.mjs` | Rebuilds the animated README pictures in `docs/images/` from the real drawing code (made-up sessions) |
+| `scripts/release.sh` | Publishes a new version: sets it in `plugin.json`, commits, tags, pushes and creates the GitHub release |
+
+**Releasing an update:** installed copies only see a change once the version in `.claude-plugin/plugin.json` goes up. Commit your changes, then run (with the new version and a line on what changed):
+
+```bash
+./scripts/release.sh 0.4.2 "What changed"
+```
+
+Use the last number for fixes (0.4.1 → 0.4.2), the middle one for new features (0.4.2 → 0.5.0).
 
 **Checks before committing:**
 
