@@ -3,9 +3,12 @@
 # ~/.claude/settings.json env), and disable (not remove) the marketplace install, whose
 # copy cannot reach the desktop app's session tools. Backs up settings.json first.
 set -euo pipefail
-S="$HOME/.claude/settings.json"; R="$HOME/Local Work/Personal/Claude-Session-Following"
+S="$HOME/.claude/settings.json"
+R="${0:A:h:h}"   # this repo folder, wherever it was cloned
+print "mod folder: $R"
+mkdir -p "$HOME/.claude"; [[ -e "$S" ]] || print "{}" > "$S"
 cp -p "$S" "$S.bak-$(date +%Y%m%d-%H%M%S)"; print "backup made"
-claude plugin disable session-following@claude-session-following || true
+claude plugin disable session-following@claude-session-following 2>/dev/null || true
 python3 -I - "$S" "$R" <<'PY'
 import json, os, sys
 s, r = sys.argv[1], sys.argv[2]
