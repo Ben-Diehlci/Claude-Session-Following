@@ -262,7 +262,7 @@ node scripts/make-docs.mjs
 
 Type-check with TypeScript 5.4+ using the `tsconfig.json` the app writes beside a loaded mod (`.claude-plugin/types/tsconfig.json`).
 
-**Lessons learned** (details in `plan-v0.2.md`):
+**Lessons learned:**
 - `Box` sizes are **character cells**, not pixels. Only `Svg` sizes are pixels.
 - Give every `Svg` a distinct, non-empty `alt`.
 - Never name a variable `h` in code that draws (JSX compiles to `h(...)`).
