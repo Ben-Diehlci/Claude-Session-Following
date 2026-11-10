@@ -30,7 +30,7 @@ const Shimmer: ClientModule<ShimmerProps, Local> = (props, surface) => {
       if (e.type === 'down' && (e.button ?? 'left') === 'left') surface.post({ open: props.id })
     })
   }
-  const chars = [...props.text]
+  const chars = [...props.text].map(ch => (ch === ' ' ? '\u00a0' : ch))
   const len = chars.length
   const band = props.still ? -99 : ((state.phase * 1.4) % (len + 10)) - 3
   return (

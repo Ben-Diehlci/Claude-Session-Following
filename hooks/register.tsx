@@ -8,6 +8,8 @@ import type { ShimmerProps } from './shimmer'
 const PANE = 'session-following'
 const SERVER = 'ccd_session_mgmt'
 const RECENT_DAYS = 3
+// projects with no activity for this long are folded and moved to the bottom
+const STALE_DAYS = 7
 const POLL_MS = 10000
 const CHECK_MS = 4000
 const IDLE_CACHE_MS = 120000
@@ -167,6 +169,16 @@ function ctxPercent(u: UsageRes | null): number | null {
 async function baseDir($: EngineInterface): Promise<string> {
   const home = (await $.env.get('HOME')) ?? ''
   return home ? `${home}/.claude/session-following` : ''
+}
+
+let selfMode = ''
+let selfModeAt = 0
+async function getSelfMode($: EngineInterface): Promise<string> {
+  if (Date.now() - selfModeAt < 60000) return selfMode
+  const raw = await callJson<Obj>($, 'get_session', { session_id: 'self' })
+  selfModeAt = Date.now()
+  selfMode = raw && typeof raw.permissionMode === 'string' ? raw.permissionMode : ''
+  return selfMode
 }
 
 async function getSelfId($: EngineInterface): Promise<string> {
@@ -450,6 +462,7 @@ const PERM_ICON: Record<string, { svg: string; label: string; glyph: string }> =
   default: { svg: svg(12, 12, pst('M6 1 2 2.6V6c0 2.3 1.7 4 4 5 2.3-1 4-2.7 4-5V2.6z')), label: 'Asks before acting', glyph: '◇' },
   bypassPermissions: { svg: svg(12, 12, pst('M6 1.2 11 10H1zM6 4.5v2.6M6 8.6v.1', '#C9561E')), label: 'Bypass permissions', glyph: '⚠' },
 }
+const PERM_WORD: Record<string, string> = { auto: 'auto', acceptEdits: 'accept edits', plan: 'plan', default: 'asks first', bypassPermissions: 'bypass' }
 const ctxColor = (p: number) => (p > 85 ? RED : p >= 65 ? AMBER : GREEN)
 const dur = (ms: number) => {
   const m = Math.max(0, Math.round(ms / 60000))
@@ -518,8 +531,17 @@ export const register: Register = on => {
     const verdict = await next(e)
     // A real call (tool_use_id) the engine will put to a person: a permission prompt is up.
     if (e.tool_use_id && verdict.decision === 'ask' && e.approver === 'person' && e.tool !== 'AskUserQuestion') {
-      activeWaits.add(e.tool_use_id)
-      void writeFlag($, { reason: 'permission', question: toolBrief(e.tool, e.input), since: new Date().toISOString() })
+      // In auto or bypass mode the app decides by itself: no prompt reaches me.
+      const mode = await getSelfMode($).catch(() => '')
+      if (mode !== 'auto' && mode !== 'bypassPermissions') {
+        const id = e.tool_use_id
+        const brief = toolBrief(e.tool, e.input)
+        activeWaits.add(id)
+        // Only flag a prompt that is still open after a moment (quick approvals never flash amber).
+        $.clock.after(2000, () => {
+          if (activeWaits.has(id)) void writeFlag($, { reason: 'permission', question: brief, since: new Date().toISOString() })
+        })
+      }
     }
     return verdict
   })
@@ -548,8 +570,12 @@ export const register: Register = on => {
       const ask = wrapAsk
       wrapAsk = ''
       const last = lastLine(e.answer).replace(/[*_`)\]]+$/, '')
+      activeWaits.clear()
       if (ask || last.endsWith('?')) {
         void writeFlag($, { reason: 'turn', question: clip(ask || last, 160), since: new Date().toISOString() })
+      } else {
+        // the turn ended without a question: nothing is waiting on me
+        void writeFlag($, null)
       }
     }
     return result
@@ -578,21 +604,27 @@ export const register: Register = on => {
     const Svg = 'Svg' in els ? els.Svg : null
     const Client = 'Client' in els ? els.Client : null
     const icon = (source: string, alt: string, size: number, glyph: string, color?: string) =>
-      Svg ? <Svg source={source} alt={alt} width={size} height={size} /> : <Text color={color} dimColor={!color}>{glyph}</Text>
+      Svg
+        ? <Box width={size} height={size} flexShrink={0}><Svg source={source} alt={alt} width={size} height={size} /></Box>
+        : <Text color={color} dimColor={!color}>{glyph}</Text>
     const p = await read($, snap)
     const v = await read($, view)
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
+    void cutoff
     const recent = p.sessions
-      .filter(s => s.isRunning || (Date.parse(s.lastActivityAt) || 0) >= cutoff)
       // a session that is working again is not waiting on me, unless it is stuck on a permission prompt
       .map(s => (s.waiting && s.isRunning && s.waiting.reason !== 'permission' ? { ...s, waiting: null } : s))
-    const hidden = p.sessions.length - recent.length
-    const groups = buildGroups(recent)
+    const hidden = 0
+    const staleBefore = now - STALE_DAYS * 86400000
+    const isStale = (g: { latest: number }) => g.latest < staleBefore
+    const allGroups = buildGroups(recent)
+    const groups = [...allGroups.filter(g => !isStale(g)), ...allGroups.filter(isStale)]
+    const firstStale = groups.find(isStale)?.key ?? null
     const working = recent.filter(s => s.isRunning).length
     const needing = recent.filter(s => s.waiting).sort((a, b) => Date.parse(a.waiting?.since ?? '') - Date.parse(b.waiting?.since ?? ''))
     const chip = (key: string, bg: string, color: string | undefined, text: string) => (
-      <Box key={key} backgroundColor={bg} paddingX={1}>
+      <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0}>
         <Text size="caption" color={color} dimColor={!color}>{text}</Text>
       </Box>
     )
@@ -677,10 +709,10 @@ export const register: Register = on => {
         backgroundColor={pinned ? NEED_BG : s.isSelf ? SELF_BG : undefined}
         hover={{ backgroundColor: ROW_HOVER }}
       >
-        <Box flexDirection="row" gap={1} alignItems="center">
+        <Box flexDirection="row" gap={1} alignItems="center" width="100%">
           {depth > 0 && icon(CORNER, 'started by the session above', 12, '↳')}
           {statusIcon(s)}
-          <Box flexGrow={1} flexShrink={1}>{title(s, pinned ? 'n' : 's')}</Box>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : 's')}</Box>
           {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
           <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>
           <Box width={pinned && s.waiting ? TIME_W + 30 : TIME_W} flexShrink={0} justifyContent="flex-end">
@@ -695,7 +727,12 @@ export const register: Register = on => {
         {hasDetail ? (
           <Box paddingLeft={3} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
             {ms ? chip(`m:${key}`, ms.bg, ms.fg, shortModel(s.model)) : null}
-            {s.perm ? <Box key={`p:${key}`}>{permIcon(s.perm)}</Box> : null}
+            {s.perm ? (
+              <Box key={`p:${key}`} flexDirection="row" gap={1} alignItems="center">
+                {permIcon(s.perm)}
+                <Text size="caption" dimColor>{PERM_WORD[s.perm] ?? s.perm}</Text>
+              </Box>
+            ) : null}
             {s.ctx !== null ? (
               <Box key={`x:${key}`} flexDirection="row" gap={1} alignItems="center">
                 {Svg ? <Svg source={usageBar(s.ctx, 40, ctxColor(s.ctx))} alt={`${s.ctx} percent of context used`} width={40} height={6} /> : null}
@@ -767,7 +804,9 @@ export const register: Register = on => {
           </Box>
         )}
         {groups.map(g => {
-          const isCollapsed = v.collapsed.includes(g.key)
+          const stale = isStale(g)
+          // fresh projects start open, stale ones start folded; the arrow flips either
+          const isCollapsed = stale ? !v.collapsed.includes(g.key) : v.collapsed.includes(g.key)
           const isExpanded = v.expanded.includes(g.key)
           const limit = v.perGroup > 0 && !isExpanded ? v.perGroup : Infinity
           // working and waiting sessions always show; the rest fill up to the limit
@@ -781,6 +820,10 @@ export const register: Register = on => {
           const busy = g.items.filter(({ s }) => s.isRunning).length
           const need = g.items.filter(({ s }) => s.waiting).length
           return (
+            <Box key={`gw:${g.key}`} flexDirection="column" gap={1}>
+            {g.key === firstStale && (
+              <Box paddingTop={1}><Text size="caption" dimColor>{`Older projects (no activity for ${STALE_DAYS}+ days)`}</Text></Box>
+            )}
             <Box key={`g:${g.key}`} flexDirection="column" backgroundColor={GROUP_BG} paddingBottom={isCollapsed ? 0 : 1}>
               <Box flexDirection="row" gap={1} alignItems="center" backgroundColor={GROUP_HEAD_BG} paddingX={1} paddingY={1}>
                 <Button
@@ -813,6 +856,7 @@ export const register: Register = on => {
                   />
                 </Box>
               )}
+            </Box>
             </Box>
           )
         })}
