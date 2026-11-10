@@ -54,7 +54,7 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 - **Needs you section:** pinned at the top. It shows sessions waiting for an approval or an answer, the reason, the question itself when available, and how long they've waited.
 - **Finished, not seen section:** sessions that finished a task without needing you and that you haven't looked at yet, like unread messages. Each shows a blue dot, the last line of its reply and when it finished, with a **Mark all seen** button.
 - **One card per project folder**, most recently active first:
-  - a bold folder name, its area (for example `Personal` or `Work`) and counts
+  - a bold folder name, its area (the folder it sits in, for example `Personal` or `Work`; see [Area label](#area-label)) and counts
   - a fold arrow to collapse the card
   - a **"Show N more"** link when the project has more sessions than your per-project setting
 - **Sub-sessions** that another session started are indented under it, and the parent shows "3 helpers · 1 working".
@@ -163,6 +163,18 @@ Use this to work on the mod. Claude Code loads it straight from your folder, so 
 
 The panel refreshes on its own. It checks for changes every few seconds and redraws about once a minute, or sooner when something changes. It only reads sessions while the panel is open.
 
+### Area label
+
+The small grey caption under each project name is the folder the project sits in. For `~/Code/Work/billing` it shows `Work`. Projects directly in your home folder (such as `~/billing`) show no caption.
+
+If you keep all your projects under one main folder, you can make the caption show the first folder below it instead. Create `~/.claude/session-following/settings.json` with:
+
+```json
+{ "mainFolder": "Projects" }
+```
+
+Then `~/Projects/Work/team-site/app` shows `Work` rather than `team-site`, and projects directly inside `~/Projects` show no caption. Projects outside the main folder use the normal caption. The panel rereads this file about once a minute.
+
 ---
 
 ## Examples
@@ -213,7 +225,7 @@ A session that is waiting on you counts under **need you**, not **working**, eve
 
 ## What it reads and writes
 
-- **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac.
+- **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac. Also the optional `~/.claude/session-following/settings.json` ([Area label](#area-label)).
 - **Writes:**
   - `~/.claude/session-following/waiting/<session-id>.json`, the "needs you" notes (one small file per session)
   - `~/.claude/session-following/busy/<session-id>.json`, a note a session keeps while its helper agents or background commands still run after its own reply ended, so it shows as working ("1 background task")

@@ -388,6 +388,7 @@ async function poll($: EngineInterface): Promise<void> {
       }
     }
     const usageSelf = await callJson<UsageRes>($, 'get_usage', { session_id: 'self' })
+    await loadSettings($)
     const flags = await readFlags($)
     const doneFlags = await readDone($)
     // A session whose turn ended while its helper agents still run is working too
@@ -539,11 +540,43 @@ function folderName(cwd: string): string {
   return parts[parts.length - 1] ?? '(no folder)'
 }
 
+// Optional settings in ~/.claude/session-following/settings.json, e.g. {"mainFolder": "Projects"}
+let mainFolder = ''
+let homeDir = ''
+let settingsAt = 0
+async function loadSettings($: EngineInterface): Promise<void> {
+  if (Date.now() - settingsAt < 60000) return
+  settingsAt = Date.now()
+  homeDir = ((await $.env.get('HOME')) ?? '').replace(/\/+$/, '')
+  const dir = await baseDir($)
+  let mf = ''
+  try {
+    const r = dir ? await $.fs.read(`${dir}/settings.json`) : ''
+    const o = parseJson<Obj>(typeof r === 'string' ? r : '')
+    if (o && typeof o.mainFolder === 'string') mf = o.mainFolder.trim().replace(/^\/+|\/+$/g, '')
+  } catch {
+    // no settings file: use the parent-folder label
+  }
+  mainFolder = mf
+}
+
+// Caption under a project group's name. With mainFolder set and the project inside it:
+// the first folder below it (empty for a project directly inside). Otherwise: the parent
+// folder, skipped when that is the home folder or a top-level folder like /Users.
 function areaName(cwd: string): string {
-  const i = cwd.indexOf('/Local Work/')
-  if (i < 0) return ''
-  const rest = cwd.slice(i + '/Local Work/'.length).split('/')
-  return rest.length > 1 ? (rest[0] ?? '') : ''
+  if (mainFolder) {
+    const marker = `/${mainFolder}/`
+    const i = cwd.indexOf(marker)
+    if (i >= 0) {
+      const rest = cwd.slice(i + marker.length).split('/').filter(Boolean)
+      return rest.length > 1 ? (rest[0] ?? '') : ''
+    }
+  }
+  const parts = cwd.replace(/\/+$/, '').split('/').filter(Boolean)
+  if (parts.length < 3) return ''
+  const parent = '/' + parts.slice(0, -1).join('/')
+  if (homeDir && parent === homeDir) return ''
+  return parts[parts.length - 2] ?? ''
 }
 
 type Group = { key: string; name: string; area: string; latest: number; items: { s: Sess; depth: number }[] }
