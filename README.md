@@ -5,3 +5,6 @@ A Claude desktop app mod that adds a **Sessions** pane beside the chat. It lists
 Open it with `/sessions`. It refreshes every 10 seconds and hides sessions idle for more than 3 days.
 
 Private project. Notes: handoff.md, plan.md, todo.md.
+
+## Install
+Run `scripts/install.sh` (adds this folder as the local marketplace `claude-session-following` and installs `session-following`), then restart the Claude app. Run it again after changes to update.

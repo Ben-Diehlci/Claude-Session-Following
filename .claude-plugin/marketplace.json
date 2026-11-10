@@ -1,0 +1,12 @@
+{
+  "name": "claude-session-following",
+  "owner": { "name": "Ben-Diehlci" },
+  "metadata": { "description": "Sessions pane for the Claude desktop app" },
+  "plugins": [
+    {
+      "name": "session-following",
+      "description": "Side pane listing all Claude desktop sessions by project folder, with status and sub-sessions",
+      "source": "./"
+    }
+  ]
+}
