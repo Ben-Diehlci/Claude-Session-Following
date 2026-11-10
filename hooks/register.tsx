@@ -20,7 +20,7 @@ const FLAG_MAX_AGE_MS = 24 * 3600 * 1000
 const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: [], cheerUntil: 0, cheerTitle: '' }
 // Bump the tag when Snapshot changes: it declines what an earlier version stored.
 const snap = atom({ plugin: 'session-following', key: 'snap' } as const, EMPTY, {
-  shape: 'snap-5',
+  shape: 'snap-6',
 })
 const PER_GROUP_DEFAULT = 5
 const PER_GROUP_CHOICES = [3, 5, 10, 0]
@@ -79,6 +79,8 @@ function toSess(r: Raw, isSelf: boolean): Sess {
     workingSince: 0,
     waiting: null,
     done: null,
+    bg: 0,
+    bgLabel: '',
   }
 }
 
@@ -283,6 +285,67 @@ async function markSeen($: EngineInterface, list: Sess[]): Promise<void> {
   void poll($)
 }
 
+// ---- background helpers: ~/.claude/session-following/busy/<id>.json --------------
+// The app reports a session as not running once its turn ends, even while helper
+// agents it started keep working in the background. Each session's own copy of the
+// mod checks $.agent.list() every few seconds and keeps a note while any run;
+// the note is refreshed every 30 s, so a reader drops one older than 90 s (crash).
+const BUSY_REFRESH_MS = 30000
+const BUSY_MAX_AGE_MS = 90000
+let bgLast = { key: '', at: 0 }
+
+async function bgCheck($: EngineInterface): Promise<void> {
+  let running: { id: string; description: string; type: string }[] = []
+  try {
+    running = (await $.agent.list()).filter(a => a.status === 'running' || a.status === 'pending')
+  } catch {
+    return
+  }
+  const key = running.map(a => a.id).sort().join(',')
+  const now = Date.now()
+  if (key === bgLast.key && (key === '' || now - bgLast.at < BUSY_REFRESH_MS)) return
+  bgLast = { key, at: now }
+  try {
+    const id = await getSelfId($)
+    const dir = await baseDir($)
+    if (!id || !dir) return
+    const label = running.map(a => a.description || a.type).filter(Boolean).slice(0, 2).join(', ')
+    const body = running.length > 0
+      ? { sessionId: id, count: running.length, label: clip(label, 60), at: new Date(now).toISOString() }
+      : { sessionId: id, cleared: true }
+    await $.fs.write(`${dir}/busy/${id}.json`, JSON.stringify(body))
+  } catch {
+    // best-effort
+  }
+}
+
+async function readBusy($: EngineInterface): Promise<Map<string, { count: number; label: string }>> {
+  const out = new Map<string, { count: number; label: string }>()
+  const dir = await baseDir($)
+  if (!dir) return out
+  let entries: { name: string; mtimeMs: number }[] = []
+  try {
+    entries = await $.fs.list(`${dir}/busy`)
+  } catch {
+    return out
+  }
+  const now = Date.now()
+  for (const en of entries) {
+    if (!en.name.endsWith('.json') || (en.mtimeMs && now - en.mtimeMs > BUSY_MAX_AGE_MS)) continue
+    try {
+      const r = await $.fs.read(`${dir}/busy/${en.name}`)
+      const o = parseJson<Obj>(typeof r === 'string' ? r : '')
+      if (!o || o.cleared || typeof o.sessionId !== 'string' || typeof o.count !== 'number' || o.count < 1) continue
+      const t = Date.parse(typeof o.at === 'string' ? o.at : '')
+      if (Number.isNaN(t) || now - t > BUSY_MAX_AGE_MS) continue
+      out.set(o.sessionId, { count: o.count, label: typeof o.label === 'string' ? o.label : '' })
+    } catch {
+      // unreadable file: ignore
+    }
+  }
+  return out
+}
+
 const isUnread = (s: Sess) => !!s.done && !s.done.seen && !s.isRunning && !s.waiting
 
 function clockTime(iso: string): string {
@@ -320,6 +383,17 @@ async function poll($: EngineInterface): Promise<void> {
     const usageSelf = await callJson<UsageRes>($, 'get_usage', { session_id: 'self' })
     const flags = await readFlags($)
     const doneFlags = await readDone($)
+    // A session whose turn ended while its helper agents still run is working too
+    const busy = await readBusy($)
+    for (const s of rows) {
+      const b = busy.get(s.id)
+      // only while its own turn has ended: helpers inside a running turn are not "background"
+      if (b && !s.isRunning) {
+        s.bg = b.count
+        s.bgLabel = b.label
+        s.isRunning = true
+      }
+    }
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
     const recent = rows.filter(s => s.isRunning || (Date.parse(s.lastActivityAt) || 0) >= cutoff)
@@ -426,6 +500,7 @@ async function toastOnce($: EngineInterface, s: Sess): Promise<void> {
 }
 
 async function tick($: EngineInterface): Promise<void> {
+  void bgCheck($)
   if (Date.now() - lastPollAt < POLL_MS - 500) return
   await poll($)
 }
@@ -613,6 +688,14 @@ export const register: Register = on => {
     ticker?.cancel()
     ticker = null
     await writeFlag($, null)
+    bgLast = { key: 'end', at: 0 }
+    try {
+      const id = await getSelfId($)
+      const dir = await baseDir($)
+      if (id && dir) await $.fs.write(`${dir}/busy/${id}.json`, JSON.stringify({ sessionId: id, cleared: true }))
+    } catch {
+      // best-effort
+    }
     return next(e)
   })
 
@@ -799,6 +882,9 @@ export const register: Register = on => {
       const bits = [
         s.effort ? small('e', s.effort) : null,
         s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
+        s.bg > 0
+          ? small('bg', `${s.bg} helper${s.bg === 1 ? '' : 's'} working in background${s.bgLabel ? `: ${s.bgLabel}` : ''}`, GREEN)
+          : null,
         kids ? small('h', `${kids.n} helper${kids.n === 1 ? '' : 's'}${kids.w > 0 ? ` · ${kids.w} working` : ''}`) : null,
         s.branch ? small('b', s.branch) : null,
         !fin && s.done && !s.isRunning && !s.waiting

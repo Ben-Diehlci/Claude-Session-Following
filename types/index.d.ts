@@ -38,6 +38,10 @@ export type Sess = {
   workingSince: number
   waiting: Waiting | null
   done: Done | null
+  /** Helper agents still running after the session's own turn ended (0 = none). */
+  bg: number
+  /** Their task descriptions, joined and clipped. */
+  bgLabel: string
 }
 
 export type Usage = {
