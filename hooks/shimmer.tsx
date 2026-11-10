@@ -30,11 +30,12 @@ const Shimmer: ClientModule<ShimmerProps, Local> = (props, surface) => {
       if (e.type === 'down' && (e.button ?? 'left') === 'left') surface.post({ open: props.id })
     })
   }
-  const chars = [...props.text].map(ch => (ch === ' ' ? '\u00a0' : ch))
+  const chars = [...props.text]
   const len = chars.length
   const band = props.still ? -99 : ((state.phase * 1.4) % (len + 10)) - 3
+  // One Text holding inline spans keeps the spaces (separate boxes per letter drop them).
   return (
-    <Box flexDirection="row">
+    <Text wrap="truncate-end">
       {chars.map((ch, i) => {
         const d = Math.abs(i - band)
         return (
@@ -43,7 +44,7 @@ const Shimmer: ClientModule<ShimmerProps, Local> = (props, surface) => {
           </Text>
         )
       })}
-    </Box>
+    </Text>
   )
 }
 

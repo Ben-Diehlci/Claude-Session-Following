@@ -624,8 +624,8 @@ export const register: Register = on => {
     const working = recent.filter(s => s.isRunning).length
     const needing = recent.filter(s => s.waiting).sort((a, b) => Date.parse(a.waiting?.since ?? '') - Date.parse(b.waiting?.since ?? ''))
     const chip = (key: string, bg: string, color: string | undefined, text: string) => (
-      <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0}>
-        <Text size="caption" color={color} dimColor={!color}>{text}</Text>
+      <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0} minWidth={text.length * 7 + 14}>
+        <Text size="caption" color={color} dimColor={!color} wrap="truncate-end">{text}</Text>
       </Box>
     )
 
@@ -753,7 +753,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
-            {Svg ? <Svg source={clawd(mood, 32, 24)} alt={`Clawd, ${mood}`} width={32} height={24} /> : null}
+            {Svg ? <Box width={40} height={30} flexShrink={0}><Svg source={clawd(mood, 40, 30)} alt={`Clawd, ${mood}`} width={40} height={30} /></Box> : null}
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
@@ -764,16 +764,19 @@ export const register: Register = on => {
           <Text size="caption" color="warning">{`longest waiting: ${dur(now - Date.parse(longest.since))}`}</Text>
         )}
         {p.usage.length > 0 && (
-          <Box flexDirection="row" gap={3} alignItems="center" flexWrap="wrap">
+          <Box flexDirection="column" gap={1} backgroundColor={GROUP_BG} paddingX={1} paddingY={1}>
             {[...p.usage].sort((a, b) => Number(b.label.toLowerCase().startsWith('5-hour')) - Number(a.label.toLowerCase().startsWith('5-hour'))).map((w, i) => {
               const c = w.percent > 80 ? RED : w.percent >= 60 ? AMBER : GREEN
               return (
-                <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center">
-                  <Text size="caption" dimColor>{w.label}</Text>
-                  {Svg
-                    ? <Svg source={usageBar(w.percent, 60, c)} alt={`${w.percent} percent of ${w.label} used`} width={60} height={6} />
-                    : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
-                  <Text size="caption" dimColor tabular>{`${w.percent}%${w.resetsIn ? ` · resets in ${w.resetsIn}` : ''}`}</Text>
+                <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center" width="100%">
+                  <Box width={130} flexShrink={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
+                  <Box flexGrow={1} flexShrink={1} minWidth={60}>
+                    {Svg
+                      ? <Svg source={usageBar(w.percent, 160, c)} alt={`${w.percent} percent of ${w.label} used`} width={160} height={6} />
+                      : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
+                  </Box>
+                  <Box width={40} flexShrink={0} justifyContent="flex-end"><Text size="caption" weight="medium" tabular>{`${w.percent}%`}</Text></Box>
+                  <Box width={110} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor tabular>{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
                 </Box>
               )
             })}
@@ -797,9 +800,9 @@ export const register: Register = on => {
           </Box>
         )}
         {groups.length > 0 && (
-          <Box flexDirection="row" gap={1} alignItems="center" paddingX={1}>
-            <Box flexGrow={1} flexShrink={1} />
-            <Box width={RC_W} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor>Remote</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center" paddingX={1} width="100%">
+            <Box flexGrow={1} flexShrink={1}><Text size="caption" dimColor>Environment · session</Text></Box>
+            <Box width={RC_W} flexShrink={0} justifyContent="center"><Text size="caption" dimColor>Remote</Text></Box>
             <Box width={TIME_W} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor>Active</Text></Box>
           </Box>
         )}
