@@ -17,7 +17,7 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 - [What you get](#what-you-get)
 - [Requirements](#requirements)
 - [Install](#install)
-- [Using the panel](#using-the-panel)
+- [Using it](#using-it)
 - [Examples](#examples)
 - [How "Needs you" works](#how-needs-you-works)
 - [What it reads and writes](#what-it-reads-and-writes)
@@ -74,14 +74,25 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 
 - **The Claude desktop app** with the Code tab, on **macOS**. Clicking a title uses macOS's `open` command to jump to the session.
 - **A Claude Code version that supports mods.** It was built and tested on Claude Code 2.1.317. Mods are an early-access feature, so a future app update may change how they work.
-- **zsh and python3** for the install script. Both come with macOS.
-- **git** to clone the repo.
+- **For the Hard install only:** git, zsh and python3 (all come with macOS, git after `xcode-select --install`).
 
 ---
 
 ## Install
 
-The repo is its own plugin marketplace. Run these in a terminal:
+Pick one of three ways. The repo is its own plugin marketplace, so the first two need nothing but this repo's name.
+
+### Simple: inside Claude (no terminal)
+
+1. In the Claude desktop app, click **+** next to the prompt box, then **Plugins**.
+2. Choose **Add marketplace** and enter `Ben-Diehlci/Claude-Session-Following`.
+3. Find **session-following** in the list and click **Add plugin**.
+
+(In a terminal `claude` chat you can do the same with `/plugin`: add the marketplace, then install `session-following` from it.)
+
+### Medium: two terminal commands
+
+Run these in a terminal:
 
 ```bash
 claude plugin marketplace add Ben-Diehlci/Claude-Session-Following
@@ -91,19 +102,39 @@ claude plugin marketplace add Ben-Diehlci/Claude-Session-Following
 claude plugin install session-following@claude-session-following
 ```
 
-Or in the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `Ben-Diehlci/Claude-Session-Following`, then **Add plugin**.
+### Hard: from your own copy (to change the code)
 
-Then **quit and reopen the Claude app**, open a new session and type `/sessions`.
+Use this to work on the mod. Claude Code loads it straight from your folder, so your edits apply as you make them.
 
-**Getting updates automatically:** run `/plugin` in a terminal session, open **Marketplaces**, pick `claude-session-following` and turn on auto-update. It's off by default for marketplaces that aren't Anthropic's. Without it, see [Update or uninstall](#update-or-uninstall).
+1. Get the code:
 
-### Install from a clone (for working on the mod)
+   ```bash
+   git clone https://github.com/Ben-Diehlci/Claude-Session-Following.git
+   ```
 
-Clone the repo, then run `./scripts/use-plugin-dir.sh` from inside it. That backs up `~/.claude/settings.json` and adds the folder to `CLAUDE_CODE_PLUGIN_DIRS`, so every session loads the mod straight from the folder and your edits reload by themselves. Use either this or the marketplace install, not both.
+2. Check that it is sound (this reads the mod the way Claude Code will):
+
+   ```bash
+   cd Claude-Session-Following && claude plugin validate .
+   ```
+
+3. Load it in every session from that folder:
+
+   ```bash
+   ./scripts/use-plugin-dir.sh
+   ```
+
+   This backs up `~/.claude/settings.json` and adds the folder to `CLAUDE_CODE_PLUGIN_DIRS`. Use either this or one of the marketplace installs above, not both.
+
+### After installing
+
+1. **Quit and reopen the Claude app**, then open a new session.
+2. Type `/sessions`. The Sessions panel opens beside the chat. If it doesn't, see [Troubleshooting](#troubleshooting).
+3. **Turn on auto-update** (marketplace installs only): type `/plugin`, open **Marketplaces**, pick `claude-session-following` and turn on auto-update. It's off by default for marketplaces that aren't Anthropic's. Without it, see [Update or uninstall](#update-or-uninstall).
 
 ---
 
-## Using the panel
+## Using it
 
 ### Reading a row
 
@@ -273,7 +304,7 @@ Type-check with TypeScript 5.4+ using the `tsconfig.json` the app writes beside 
 
 ## Status and credits
 
-- **Version 0.4.0.** In daily use by its author. Mods are early access in Claude Code, so expect occasional breakage after app updates.
+- **Version 0.5.1.** In daily use by its author. Mods are early access in Claude Code, so expect occasional breakage after app updates.
 - **License:** [MIT](LICENSE). Use, change and share it freely; keep the copyright notice.
 - **Clawd** is Anthropic's Claude Code mascot. The pixel drawings here are an unofficial fan-made version. This project isn't affiliated with or endorsed by Anthropic.
-- The animated stage technique (SMIL with wall-clock offsets) follows the author's *Claude Coded Lines Tracker* mod.
+- The animated stage technique (SMIL with wall-clock offsets) follows the author's [Lines Tracker](https://github.com/Ben-Diehlci/Claude-CodedLinesTracker) mod, which counts the lines of code Claude writes.
