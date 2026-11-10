@@ -6,7 +6,9 @@ Session Following is a mod for the Claude desktop app (Code tab). It adds a **Se
 
 If you run several sessions at once and lose track of them in the sidebar, this is for you.
 
-![Clawd typing at a desk for each working session](docs/images/stage-working.png)
+![The Sessions panel: Clawd's stage, counts, usage limits, a session that needs you, and project cards](docs/images/panel.svg)
+
+*Example panel with made-up sessions. The pictures in this README are animated: Clawd walks and types, the green titles shimmer.*
 
 ---
 
@@ -38,9 +40,12 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 | A session just finished | Clawd jumps, confetti falls, and "*title* is done" appears |
 | A usage limit is over 80% | Clawd sweats and fans himself |
 
-![Clawd waving a "2 need you" sign](docs/images/stage-needs-you.png)
-![Clawd asleep](docs/images/stage-quiet.png)
-![Clawd celebrating a finished session](docs/images/stage-finished.png)
+![Clawd typing at a desk for each working session](docs/images/stage-working.svg)
+
+| | |
+|---|---|
+| ![Clawd waving a "2 need you" sign](docs/images/stage-needs-you.svg) | ![Clawd asleep with floating z's](docs/images/stage-quiet.svg) |
+| ![Clawd jumping in confetti: a session finished](docs/images/stage-finished.svg) | ![Clawd sweating and fanning himself: a usage limit is over 80%](docs/images/stage-hot.svg) |
 
 **Below the stage:**
 
@@ -224,6 +229,7 @@ git pull
 | `hooks/shimmer.tsx` | The shimmering title (a client module) |
 | `types/index.d.ts` | The shape of the mod's saved state |
 | `scripts/stage-selfcheck.mjs` | Draws every stage scene and checks the SVG is well formed |
+| `scripts/make-docs.mjs` | Rebuilds the animated README pictures in `docs/images/` from the real drawing code (made-up sessions) |
 
 **Checks before committing:**
 
@@ -233,6 +239,12 @@ claude plugin validate .
 
 ```bash
 node scripts/stage-selfcheck.mjs
+```
+
+After changing how the stage or panel looks, rebuild the README pictures:
+
+```bash
+node scripts/make-docs.mjs
 ```
 
 Type-check with TypeScript 5.4+ using the `tsconfig.json` the app writes beside a loaded mod (`.claude-plugin/types/tsconfig.json`).
