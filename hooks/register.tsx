@@ -152,6 +152,20 @@ function buildGroups(all: Sess[]): Group[] {
   return [...groups.values()].sort((a, b) => b.latest - a.latest)
 }
 
+const GREEN = '#1D9E75'
+const GREY = '#888780'
+const svg = (w: number, h: number, body: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${body}</svg>`
+const DOT_RUN = svg(10, 10, `<circle cx="5" cy="5" r="4.5" fill="${GREEN}"/>`)
+const DOT_IDLE = svg(10, 10, `<circle cx="5" cy="5" r="3.75" fill="none" stroke="${GREY}" stroke-width="1.5"/>`)
+const FOLDER = svg(14, 14, `<path d="M1.5 3.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="${GREY}" stroke-width="1.2" stroke-linejoin="round"/>`)
+const CORNER = svg(12, 12, `<path d="M3 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5H10M7.5 6l2.5 2.5L7.5 11" fill="none" stroke="${GREY}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`)
+const PHONE = svg(12, 12, `<rect x="3" y="1" width="6" height="10" rx="1.3" fill="none" stroke="${GREY}" stroke-width="1.1"/><path d="M5.3 9.2h1.4" stroke="${GREY}" stroke-width="1.1" stroke-linecap="round"/>`)
+const ROW_HOVER = 'rgba(128,128,128,0.12)'
+const SELF_BG = 'rgba(55,138,221,0.14)'
+const CHIP_GREEN = 'rgba(29,158,117,0.14)'
+const CHIP_GREY = 'rgba(128,128,128,0.12)'
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'sessions', description: 'Open the Sessions pane' })
@@ -168,7 +182,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const Svg = 'Svg' in els ? els.Svg : null
+    const icon = (source: string, alt: string, size: number, glyph: string, color?: string) =>
+      Svg ? <Svg source={source} alt={alt} width={size} height={size} /> : <Text color={color} dimColor={!color}>{glyph}</Text>
     const p = await read($, snap)
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
@@ -176,48 +194,74 @@ export const register: Register = on => {
     const hidden = p.sessions.length - recent.length
     const groups = buildGroups(recent)
     const working = recent.filter(s => s.isRunning).length
+    const chip = (key: string, bg: string, color: string | undefined, text: string) => (
+      <Box key={key} backgroundColor={bg} paddingX={1}>
+        <Text size="caption" color={color} dimColor={!color}>{text}</Text>
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-          <Text>
-            <Text color="success" bold>{`● ${working} working`}</Text>
-            <Text dimColor>{`   ○ ${recent.length - working} idle`}</Text>
-          </Text>
-          <Button key="refresh" label="Refresh" plain onPress={() => void poll($)} />
+          <Box flexDirection="row" gap={1} alignItems="center">
+            {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
+            {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
+          </Box>
+          <Button key="refresh" label="Refresh" plain dimColor onPress={() => void poll($)} />
         </Box>
         {p.error !== null && <Text color="error">{`Couldn't read sessions: ${p.error}`}</Text>}
         {p.checkedAt === '' && <Text dimColor>Loading sessions…</Text>}
         {groups.map(g => (
           <Box key={`g:${g.key}`} flexDirection="column">
-            <Text dimColor size="footnote" wrap="truncate-end">
-              {`▸ ${g.name}${g.area ? `  ·  ${g.area}` : ''}  (${g.items.length})`}
-            </Text>
+            <Box flexDirection="row" gap={1} alignItems="center" paddingBottom={0}>
+              {icon(FOLDER, '', 14, '▸')}
+              <Box flexGrow={1} flexShrink={1}>
+                <Text size="footnote" weight="medium" dimColor wrap="truncate-end">
+                  {g.area ? `${g.name}  ·  ${g.area}` : g.name}
+                </Text>
+              </Box>
+              <Text size="caption" dimColor tabular>{String(g.items.length)}</Text>
+            </Box>
             {g.items.map(({ s, depth }) => (
-              <Box key={`s:${s.id}`} flexDirection="row" gap={1} paddingLeft={depth * 2}>
-                <Text color={s.isRunning ? 'success' : 'inactive'}>{depth > 0 ? '↳ ●' : '●'}</Text>
+              <Box
+                key={`s:${s.id}`}
+                flexDirection="row"
+                gap={1}
+                alignItems="center"
+                paddingLeft={1 + depth * 2}
+                paddingRight={1}
+                backgroundColor={s.isSelf ? SELF_BG : undefined}
+                hover={{ backgroundColor: ROW_HOVER }}
+              >
+                {depth > 0 && icon(CORNER, 'started by the session above', 12, '↳')}
+                {s.isRunning ? icon(DOT_RUN, 'working', 10, '●', 'success') : icon(DOT_IDLE, 'idle', 10, '○')}
                 <Box flexGrow={1} flexShrink={1}>
                   {s.link ? (
                     <Button
                       key={`open:${s.id}`}
                       plain
                       label={s.isSelf ? `${s.title} (this one)` : s.title}
-                      dimColor={!s.isRunning}
+                      dimColor={!s.isRunning && !s.isSelf}
                       onPress={() => void openSession($, s)}
                     />
                   ) : (
                     <Text wrap="truncate-end">{s.title}</Text>
                   )}
                 </Box>
-                {s.remote && <Text dimColor size="caption">RC</Text>}
+                {s.remote && icon(PHONE, 'Remote Control on', 12, 'RC')}
                 <Text dimColor size="caption" tabular>{ago(s.lastActivityAt, now)}</Text>
               </Box>
             ))}
           </Box>
         ))}
-        <Text dimColor size="caption">
-          {`${hidden > 0 ? `${hidden} idle for over ${RECENT_DAYS} days hidden · ` : ''}RC = Remote Control · updated ${p.checkedAt ? ago(p.checkedAt, now) : '—'}`}
-        </Text>
+        <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_RUN, '', 10, '●', 'success')}<Text size="caption" dimColor>Working</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, '', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(PHONE, '', 12, 'RC')}<Text size="caption" dimColor>Remote</Text></Box>
+          <Text size="caption" dimColor>
+            {`${hidden > 0 ? `${hidden} older hidden · ` : ''}updated ${p.checkedAt ? ago(p.checkedAt, now) : '—'}`}
+          </Text>
+        </Box>
       </Box>
     )
   })
