@@ -442,8 +442,9 @@ const PHONE = svg(12, 12, `<rect x="3" y="1" width="6" height="10" rx="1.3" fill
 const ROW_HOVER = 'rgba(128,128,128,0.12)'
 const GROUP_BG = 'rgba(128,128,128,0.07)'
 const GROUP_HEAD_BG = 'rgba(128,128,128,0.10)'
-const TIME_W = 40
-const RC_W = 44
+// Box widths are in character cells, not pixels (Svg width/height are pixels).
+const TIME_W = 7
+const RC_W = 7
 const MODEL_STYLE: Record<string, { bg: string; fg: string }> = {
   opus: { bg: 'rgba(216,90,48,0.16)', fg: '#993C1D' },
   sonnet: { bg: 'rgba(55,138,221,0.16)', fg: '#185FA5' },
@@ -605,7 +606,7 @@ export const register: Register = on => {
     const Client = 'Client' in els ? els.Client : null
     const icon = (source: string, alt: string, size: number, glyph: string, color?: string) =>
       Svg
-        ? <Box width={size} height={size} flexShrink={0}><Svg source={source} alt={alt} width={size} height={size} /></Box>
+        ? <Box flexShrink={0}><Svg source={source} alt={alt} width={size} height={size} /></Box>
         : <Text color={color} dimColor={!color}>{glyph}</Text>
     const p = await read($, snap)
     const v = await read($, view)
@@ -624,7 +625,7 @@ export const register: Register = on => {
     const working = recent.filter(s => s.isRunning).length
     const needing = recent.filter(s => s.waiting).sort((a, b) => Date.parse(a.waiting?.since ?? '') - Date.parse(b.waiting?.since ?? ''))
     const chip = (key: string, bg: string, color: string | undefined, text: string) => (
-      <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0} minWidth={text.length * 7 + 14}>
+      <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0}>
         <Text size="caption" color={color} dimColor={!color} wrap="truncate-end">{text}</Text>
       </Box>
     )
@@ -715,7 +716,7 @@ export const register: Register = on => {
           <Box flexGrow={1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : 's')}</Box>
           {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
           <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>
-          <Box width={pinned && s.waiting ? TIME_W + 30 : TIME_W} flexShrink={0} justifyContent="flex-end">
+          <Box width={pinned && s.waiting ? TIME_W + 6 : TIME_W} flexShrink={0} justifyContent="flex-end">
             <Text dimColor size="caption" tabular>
               {pinned && s.waiting ? waitingFor(s.waiting, now) : ago(s.lastActivityAt, now)}
             </Text>
@@ -753,7 +754,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
-            {Svg ? <Box width={40} height={30} flexShrink={0}><Svg source={clawd(mood, 40, 30)} alt={`Clawd, ${mood}`} width={40} height={30} /></Box> : null}
+            {Svg ? <Box flexShrink={0}><Svg source={clawd(mood, 40, 30)} alt={`Clawd, ${mood}`} width={40} height={30} /></Box> : null}
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
@@ -769,14 +770,14 @@ export const register: Register = on => {
               const c = w.percent > 80 ? RED : w.percent >= 60 ? AMBER : GREEN
               return (
                 <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center" width="100%">
-                  <Box width={130} flexShrink={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
-                  <Box flexGrow={1} flexShrink={1} minWidth={60}>
+                  <Box width={20} flexShrink={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
+                  <Box flexGrow={1} flexShrink={1}>
                     {Svg
-                      ? <Svg source={usageBar(w.percent, 160, c)} alt={`${w.percent} percent of ${w.label} used`} width={160} height={6} />
+                      ? <Svg source={usageBar(w.percent, 120, c)} alt={`${w.percent} percent of ${w.label} used`} width={120} height={6} />
                       : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
                   </Box>
-                  <Box width={40} flexShrink={0} justifyContent="flex-end"><Text size="caption" weight="medium" tabular>{`${w.percent}%`}</Text></Box>
-                  <Box width={110} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor tabular>{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
+                  <Box width={5} flexShrink={0} justifyContent="flex-end"><Text size="caption" weight="medium" tabular>{`${w.percent}%`}</Text></Box>
+                  <Box width={18} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor tabular>{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
                 </Box>
               )
             })}
