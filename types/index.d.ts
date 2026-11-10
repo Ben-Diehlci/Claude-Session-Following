@@ -43,6 +43,8 @@ export type Snapshot = {
   usage: Usage[]
   /** Epoch ms until which Clawd cheers (a session just finished). */
   cheerUntil: number
+  /** Title of the session that finished most recently. */
+  cheerTitle: string
 }
 
 export type View = {

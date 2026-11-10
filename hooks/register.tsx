@@ -3,6 +3,7 @@ import type { Register, EngineInterface, Timer } from 'claude-code'
 
 import type { View, Sess, Snapshot, Usage, Waiting, WaitReason } from '../types'
 import { clawd, pulseDot, usageBar, type Mood } from './clawd'
+import { stageSvg, stageText } from './stage'
 import type { ShimmerProps } from './shimmer'
 
 const PANE = 'session-following'
@@ -16,10 +17,10 @@ const IDLE_CACHE_MS = 120000
 const SHIMMER_MAX = 4
 const CHEER_MS = 10000
 const FLAG_MAX_AGE_MS = 24 * 3600 * 1000
-const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: [], cheerUntil: 0 }
+const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: [], cheerUntil: 0, cheerTitle: '' }
 // Bump the tag when Snapshot changes: it declines what an earlier version stored.
 const snap = atom({ plugin: 'session-following', key: 'snap' } as const, EMPTY, {
-  shape: 'snap-3',
+  shape: 'snap-4',
 })
 const PER_GROUP_DEFAULT = 5
 const PER_GROUP_CHOICES = [3, 5, 10, 0]
@@ -312,19 +313,21 @@ async function poll($: EngineInterface): Promise<void> {
 
     // working -> idle transitions: cheer, and one toast per transition
     let finished = 0
+    let finishedTitle = ''
     for (const s of rows) {
       const was = prevRunning.get(s.id)
       if (was === true && !s.isRunning) {
         finished++
+        finishedTitle = s.title
         if (!s.isSelf) void toastOnce($, s)
       }
       prevRunning.set(s.id, s.isRunning)
     }
     const cheerUntil = finished > 0 ? now + CHEER_MS : prev.cheerUntil
-    const next: Snapshot = { checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil }
+    const next: Snapshot = { checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil, cheerTitle: finished > 0 ? finishedTitle : prev.cheerTitle }
     // Redraw only when something changed (or about once a minute for the clock texts):
     // fewer redraws, and less chance of disturbing the person's scrolling.
-    const same = (x: Snapshot) => JSON.stringify([x.sessions, x.error, x.usage, x.cheerUntil])
+    const same = (x: Snapshot) => JSON.stringify([x.sessions, x.error, x.usage, x.cheerUntil, x.cheerTitle])
     const fresh = prev.checkedAt !== '' && now - Date.parse(prev.checkedAt) < 50000
     if (!(fresh && same(prev) === same(next))) await update($, snap, () => next)
   } catch (err) {
@@ -633,12 +636,6 @@ export const register: Register = on => {
       </Box>
     )
 
-    const mood: Mood =
-      needing.length > 0 ? 'waving'
-      : p.error !== null || (p.usage.find(x => x.label.toLowerCase().startsWith('5-hour'))?.percent ?? 0) > 80 ? 'worried'
-      : p.cheerUntil > now ? 'cheering'
-      : working > 0 ? 'busy'
-      : 'asleep'
     const mini = (m: Mood) => icon(clawd(m, 16, 12), 'Clawd, working', 16, '●', 'success')
 
     // At most SHIMMER_MAX rows shimmer; the rest get still green text.
@@ -753,11 +750,21 @@ export const register: Register = on => {
     const five = p.usage.find(x => x.label.toLowerCase().startsWith('5-hour')) ?? null
     const longest = needing[0]?.waiting ?? null
 
+    const stageIn = {
+      now,
+      working: recent.filter(s => s.isRunning).map(s => s.title),
+      waiting: needing.length,
+      cheerTitle: p.cheerUntil > now ? p.cheerTitle || 'A session' : null,
+      hot: p.usage.some(x => x.percent > 80),
+    }
+
     return (
       <Box flexDirection="column" gap={1}>
+        {Svg
+          ? <Svg key="stage" source={stageSvg(stageIn)} alt={stageText(stageIn)} />
+          : <Text key="stage" dimColor>{stageText(stageIn)}</Text>}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
-            {Svg ? <Box flexShrink={0}><Svg source={clawd(mood, 40, 30)} alt={`Clawd, ${mood}`} width={40} height={30} /></Box> : null}
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
