@@ -799,15 +799,17 @@ export const register: Register = on => {
     const cutoff = now - RECENT_DAYS * 86400000
     void cutoff
     const recent = p.sessions
-      // a session that is working again is not waiting on me, unless it is stuck on a permission prompt
-      .map(s => (s.waiting && s.isRunning && s.waiting.reason !== 'permission' ? { ...s, waiting: null } : s))
+      // a session that is working again is not waiting on me, unless it is stuck on a permission
+      // prompt or a question card: the turn is still open (isRunning) until I answer those
+      .map(s => (s.waiting && s.isRunning && s.waiting.reason === 'turn' ? { ...s, waiting: null } : s))
     const hidden = 0
     const staleBefore = now - STALE_DAYS * 86400000
     const isStale = (g: { latest: number }) => g.latest < staleBefore
     const allGroups = buildGroups(recent)
     const groups = [...allGroups.filter(g => !isStale(g)), ...allGroups.filter(isStale)]
     const firstStale = groups.find(isStale)?.key ?? null
-    const working = recent.filter(s => s.isRunning).length
+    // a session paused on a question or permission prompt counts as needing me, not working
+    const working = recent.filter(s => s.isRunning && !s.waiting).length
     const needing = recent.filter(s => s.waiting).sort((a, b) => Date.parse(a.waiting?.since ?? '') - Date.parse(b.waiting?.since ?? ''))
     const finished = recent.filter(isUnread).sort((a, b) => Date.parse(b.done?.at ?? '') - Date.parse(a.done?.at ?? ''))
     const chip = (key: string, bg: string, color: string | undefined, text: string) => (
@@ -948,7 +950,7 @@ export const register: Register = on => {
 
     const stageIn = {
       now,
-      working: recent.filter(s => s.isRunning).map(s => s.title),
+      working: recent.filter(s => s.isRunning && !s.waiting).map(s => s.title),
       waiting: needing.length,
       cheerTitle: p.cheerUntil > now ? p.cheerTitle || 'A session' : null,
       hot: p.usage.some(x => x.percent > 80),
