@@ -6,6 +6,16 @@ export type Waiting = {
   since: string
 }
 
+/** A session's last turn ended with nothing waiting on me. */
+export type Done = {
+  /** When the turn ended (ISO). */
+  at: string
+  /** Last line of the reply, clipped. */
+  preview: string
+  /** I have looked at it since (opened it from the panel, replied, or marked all seen). */
+  seen: boolean
+}
+
 export type Sess = {
   id: string
   title: string
@@ -27,6 +37,7 @@ export type Sess = {
   /** Epoch ms when this mod first saw the session running; 0 when idle. */
   workingSince: number
   waiting: Waiting | null
+  done: Done | null
 }
 
 export type Usage = {

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { Register, EngineInterface, Timer } from 'claude-code'
+import type { Register, EngineInterface, Timer, RenderNode } from 'claude-code'
 
-import type { View, Sess, Snapshot, Usage, Waiting, WaitReason } from '../types'
+import type { View, Sess, Snapshot, Usage, Waiting, WaitReason, Done } from '../types'
 import { clawd, pulseDot, usageBar, type Mood } from './clawd'
 import { stageSvg, stageText, type StageInput } from './stage'
 import type { ShimmerProps } from './shimmer'
@@ -20,7 +20,7 @@ const FLAG_MAX_AGE_MS = 24 * 3600 * 1000
 const EMPTY: Snapshot = { checkedAt: '', sessions: [], error: null, usage: [], cheerUntil: 0, cheerTitle: '' }
 // Bump the tag when Snapshot changes: it declines what an earlier version stored.
 const snap = atom({ plugin: 'session-following', key: 'snap' } as const, EMPTY, {
-  shape: 'snap-4',
+  shape: 'snap-5',
 })
 const PER_GROUP_DEFAULT = 5
 const PER_GROUP_CHOICES = [3, 5, 10, 0]
@@ -46,6 +46,8 @@ type Obj = Record<string, unknown>
 let selfId = ''
 let polling = false
 let lastPollAt = 0
+let lastUsageAt = 0
+const USAGE_KEEP_MS = 15 * 60000
 let ticker: Timer | null = null
 const prevRunning = new Map<string, boolean>()
 type Detail = { model: string; effort: string; branch: string; perm: string }
@@ -76,6 +78,7 @@ function toSess(r: Raw, isSelf: boolean): Sess {
     ctx: null,
     workingSince: 0,
     waiting: null,
+    done: null,
   }
 }
 
@@ -231,6 +234,64 @@ async function readFlags($: EngineInterface): Promise<Map<string, Waiting>> {
   return out
 }
 
+// ---- finished flags: ~/.claude/session-following/done/<id>.json ------------------
+// Written by each session when its turn ends with nothing waiting; marked seen when I
+// open it from the panel, press "Mark all seen", or (cleared) when I reply in it.
+const DONE_MAX_AGE_MS = RECENT_DAYS * 86400000
+
+async function writeDone($: EngineInterface, id: string, d: Done | null): Promise<void> {
+  try {
+    const dir = await baseDir($)
+    if (!id || !dir) return
+    const body = d ? { sessionId: id, ...d } : { sessionId: id, cleared: true }
+    await $.fs.write(`${dir}/done/${id}.json`, JSON.stringify(body))
+  } catch {
+    // best-effort, like the waiting flags
+  }
+}
+
+async function readDone($: EngineInterface): Promise<Map<string, Done>> {
+  const out = new Map<string, Done>()
+  const dir = await baseDir($)
+  if (!dir) return out
+  let entries: { name: string; mtimeMs: number }[] = []
+  try {
+    entries = await $.fs.list(`${dir}/done`)
+  } catch {
+    return out
+  }
+  const now = Date.now()
+  for (const en of entries) {
+    if (!en.name.endsWith('.json') || (en.mtimeMs && now - en.mtimeMs > DONE_MAX_AGE_MS)) continue
+    try {
+      const r = await $.fs.read(`${dir}/done/${en.name}`)
+      const o = parseJson<Obj>(typeof r === 'string' ? r : '')
+      if (!o || o.cleared || typeof o.sessionId !== 'string' || typeof o.at !== 'string') continue
+      if (Number.isNaN(Date.parse(o.at))) continue
+      out.set(o.sessionId, { at: o.at, preview: typeof o.preview === 'string' ? o.preview : '', seen: o.seen === true })
+    } catch {
+      // unreadable file: ignore
+    }
+  }
+  return out
+}
+
+async function markSeen($: EngineInterface, list: Sess[]): Promise<void> {
+  const todo = list.filter(s => s.done && !s.done.seen)
+  if (todo.length === 0) return
+  for (const s of todo) if (s.done) await writeDone($, s.id, { ...s.done, seen: true })
+  void poll($)
+}
+
+const isUnread = (s: Sess) => !!s.done && !s.done.seen && !s.isRunning && !s.waiting
+
+function clockTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const h = d.getHours()
+  return `${h % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+
 function clip(s: string, n: number): string {
   const t = s.replace(/\s+/g, ' ').trim()
   return t.length > n ? `${t.slice(0, n - 1)}…` : t
@@ -258,6 +319,7 @@ async function poll($: EngineInterface): Promise<void> {
     }
     const usageSelf = await callJson<UsageRes>($, 'get_usage', { session_id: 'self' })
     const flags = await readFlags($)
+    const doneFlags = await readDone($)
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
     const recent = rows.filter(s => s.isRunning || (Date.parse(s.lastActivityAt) || 0) >= cutoff)
@@ -309,6 +371,7 @@ async function poll($: EngineInterface): Promise<void> {
         s.workingSince = runStart.get(s.id) ?? now
       } else runStart.delete(s.id)
       s.waiting = flags.get(s.id) ?? null
+      s.done = doneFlags.get(s.id) ?? null
     }
 
     // working -> idle transitions: cheer, and one toast per transition
@@ -324,7 +387,12 @@ async function poll($: EngineInterface): Promise<void> {
       prevRunning.set(s.id, s.isRunning)
     }
     const cheerUntil = finished > 0 ? now + CHEER_MS : prev.cheerUntil
-    const next: Snapshot = { checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil, cheerTitle: finished > 0 ? finishedTitle : prev.cheerTitle }
+    // The app sometimes answers "unavailable" for the plan limits for a moment: keep the
+    // last good numbers (up to USAGE_KEEP_MS) so the table doesn't blink out and back.
+    let usage = planUsage(usageSelf)
+    if (usage.length > 0) lastUsageAt = now
+    else if (prev.usage.length > 0 && now - lastUsageAt < USAGE_KEEP_MS) usage = prev.usage
+    const next: Snapshot = { checkedAt, sessions: rows, error: null, usage, cheerUntil, cheerTitle: finished > 0 ? finishedTitle : prev.cheerTitle }
     // Redraw only when something changed (or about once a minute for the clock texts):
     // fewer redraws, and less chance of disturbing the person's scrolling.
     const calm = (x: Sess) => ({ ...x, lastActivityAt: (x.lastActivityAt || '').slice(0, 16) })
@@ -367,6 +435,7 @@ async function openSession($: EngineInterface, s: Sess): Promise<void> {
   try {
     const r = await $.process.run(['/usr/bin/open', s.link])
     if (r.exitCode !== 0) $.ui.toast(`Couldn't open "${s.title}"`)
+    else await markSeen($, [s])
   } catch (err) {
     $.ui.toast(`Couldn't open "${s.title}": ${String(err).slice(0, 120)}`)
   }
@@ -443,6 +512,11 @@ const GREY = '#888780'
 const svg = (w: number, h: number, body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${body}</svg>`
 const DOT_IDLE = svg(10, 10, `<circle cx="5" cy="5" r="3.75" fill="none" stroke="${GREY}" stroke-width="1.5"/>`)
+const BLUE = '#378ADD'
+const DOT_DONE = svg(10, 10, `<circle cx="5" cy="5" r="4" fill="${BLUE}"/>`)
+const CHECKS = svg(14, 10, `<path d="M1 5.5l2.5 2.5L8 3M6 7l1 1 5.5-5.5" fill="none" stroke="${GREY}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>`)
+const CHIP_BLUE = 'rgba(55,138,221,0.16)'
+const DONE_BG = 'rgba(55,138,221,0.07)'
 const FOLDER = svg(14, 14, `<path d="M1.5 3.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="${GREY}" stroke-width="1.2" stroke-linejoin="round"/>`)
 const CORNER = svg(12, 12, `<path d="M3 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5H10M7.5 6l2.5 2.5L7.5 11" fill="none" stroke="${GREY}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`)
 const PHONE = svg(12, 12, `<rect x="3" y="1" width="6" height="10" rx="1.3" fill="none" stroke="${GREY}" stroke-width="1.1"/><path d="M5.3 9.2h1.4" stroke="${GREY}" stroke-width="1.1" stroke-linecap="round"/>`)
@@ -593,10 +667,15 @@ export const register: Register = on => {
       wrapAsk = ''
       const last = lastLine(e.answer).replace(/[*_`)\]]+$/, '')
       activeWaits.clear()
+      const id = await getSelfId($)
       if (ask || last.endsWith('?')) {
+        await writeDone($, id, null)
         void writeFlag($, { reason: 'turn', question: clip(ask || last, 160), since: new Date().toISOString() })
       } else {
-        // the turn ended without a question: nothing is waiting on me
+        // the turn ended without a question: nothing is waiting on me, so it is
+        // "finished". If this session's own panel is on screen I'm looking at it: seen.
+        const preview = clip(last.replace(/[*_`#>|]/g, ''), 140)
+        await writeDone($, id, { at: new Date().toISOString(), preview, seen: await isPlaced($) })
         void writeFlag($, null)
       }
     }
@@ -605,6 +684,8 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     wrapAsk = ''
+    // I replied here, so I've seen how it finished; the next turn end marks it again
+    void getSelfId($).then(id => writeDone($, id, null))
     void writeFlag($, null)
     return next(e)
   })
@@ -645,6 +726,7 @@ export const register: Register = on => {
     const firstStale = groups.find(isStale)?.key ?? null
     const working = recent.filter(s => s.isRunning).length
     const needing = recent.filter(s => s.waiting).sort((a, b) => Date.parse(a.waiting?.since ?? '') - Date.parse(b.waiting?.since ?? ''))
+    const finished = recent.filter(isUnread).sort((a, b) => Date.parse(b.done?.at ?? '') - Date.parse(a.done?.at ?? ''))
     const chip = (key: string, bg: string, color: string | undefined, text: string) => (
       <Box key={key} backgroundColor={bg} paddingX={1} flexShrink={0}>
         <Text size="caption" color={color} dimColor={!color} wrap="truncate-end">{text}</Text>
@@ -679,6 +761,8 @@ export const register: Register = on => {
     const statusIcon = (s: Sess) =>
       s.waiting ? (Svg ? <Svg source={pulseDot(AMBER)} alt="needs you" width={10} height={10} /> : <Text color="warning">●</Text>)
       : s.isRunning ? mini('busy')
+      : isUnread(s) ? icon(DOT_DONE, 'finished, not seen', 10, '●', BLUE)
+      : s.done?.seen ? icon(CHECKS, 'finished, seen', 14, '✓✓')
       : icon(DOT_IDLE, 'idle', 10, '○')
 
     // helpers: descendants of each parent, counted from the groups' depth-first order
@@ -703,17 +787,23 @@ export const register: Register = on => {
       return icon(pi.svg, pi.label, 12, pi.glyph)
     }
 
-    const row = (s: Sess, depth: number, key: string, pinned: boolean) => {
+    const row = (s: Sess, depth: number, key: string, pinned: boolean, fin = false) => {
       const ms = s.model ? modelStyle(s.model) : null
       const kids = helpers.get(s.id)
-      const small = (k: string, text: string, color?: string) => (
-        <Text key={`${k}:${key}`} size="caption" dimColor={!color} color={color}>{text}</Text>
-      )
+      // Any text on the row opens the chat: a Button may hold only strings and Text,
+      // so each text piece gets its own plain Button (icons and badges can't).
+      const tap = (k: string, node: RenderNode) =>
+        s.link ? <Button key={`t:${k}:${key}`} plain onPress={() => void openSession($, s)}>{node}</Button> : node
+      const small = (k: string, text: string, color?: string) =>
+        tap(k, <Text key={`${k}:${key}`} size="caption" dimColor={!color} color={color}>{text}</Text>)
       const bits = [
         s.effort ? small('e', s.effort) : null,
         s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
         kids ? small('h', `${kids.n} helper${kids.n === 1 ? '' : 's'}${kids.w > 0 ? ` · ${kids.w} working` : ''}`) : null,
         s.branch ? small('b', s.branch) : null,
+        !fin && s.done && !s.isRunning && !s.waiting
+          ? small('d', s.done.seen ? `seen · finished ${clockTime(s.done.at)}` : `finished ${clockTime(s.done.at)}, not seen`, s.done.seen ? undefined : BLUE)
+          : null,
       ].filter(Boolean)
       const hasDetail = !!ms || !!s.perm || s.ctx !== null || bits.length > 0
       return (
@@ -722,23 +812,28 @@ export const register: Register = on => {
         flexDirection="column"
         paddingLeft={1 + depth * 2}
         paddingRight={1}
-        backgroundColor={pinned ? NEED_BG : s.isSelf ? SELF_BG : undefined}
+        backgroundColor={pinned ? NEED_BG : fin ? DONE_BG : s.isSelf ? SELF_BG : undefined}
         hover={{ backgroundColor: ROW_HOVER }}
       >
         <Box flexDirection="row" gap={1} alignItems="center" width="100%">
           {depth > 0 && icon(CORNER, 'started by the session above', 12, '↳')}
           {statusIcon(s)}
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : 's')}</Box>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : fin ? 'f' : 's')}</Box>
           {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
           <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>
-          <Box width={pinned && s.waiting ? TIME_W + 6 : TIME_W} flexShrink={0} justifyContent="flex-end">
-            <Text dimColor size="caption" tabular>
-              {pinned && s.waiting ? waitingFor(s.waiting, now) : ago(s.lastActivityAt, now)}
-            </Text>
+          <Box width={(pinned && s.waiting) || fin ? TIME_W + 6 : TIME_W} flexShrink={0} justifyContent="flex-end">
+            {tap('time', (
+              <Text dimColor={!fin} color={fin ? BLUE : undefined} size="caption" tabular>
+                {pinned && s.waiting ? waitingFor(s.waiting, now) : fin && s.done ? `done ${ago(s.done.at, now)}` : ago(s.lastActivityAt, now)}
+              </Text>
+            ))}
           </Box>
         </Box>
         {pinned && s.waiting?.question ? (
-          <Box paddingLeft={3}><Text size="caption" color="warning" wrap="truncate-end">{s.waiting.question}</Text></Box>
+          <Box paddingLeft={3}>{tap('q', <Text size="caption" color="warning" wrap="truncate-end">{s.waiting.question}</Text>)}</Box>
+        ) : null}
+        {fin && s.done?.preview ? (
+          <Box paddingLeft={3}>{tap('pv', <Text size="caption" dimColor wrap="truncate-end">{`“${s.done.preview}”`}</Text>)}</Box>
         ) : null}
         {hasDetail ? (
           <Box paddingLeft={3} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
@@ -746,13 +841,13 @@ export const register: Register = on => {
             {s.perm ? (
               <Box key={`p:${key}`} flexDirection="row" gap={1} alignItems="center">
                 {permIcon(s.perm)}
-                <Text size="caption" dimColor>{PERM_WORD[s.perm] ?? s.perm}</Text>
+                {tap('pw', <Text size="caption" dimColor>{PERM_WORD[s.perm] ?? s.perm}</Text>)}
               </Box>
             ) : null}
             {s.ctx !== null ? (
               <Box key={`x:${key}`} flexDirection="row" gap={1} alignItems="center">
                 {Svg ? <Svg source={usageBar(s.ctx, 40, ctxColor(s.ctx))} alt={`${s.ctx} percent of context used`} width={40} height={6} /> : null}
-                <Text size="caption" dimColor tabular>{Svg ? `${s.ctx}%` : `ctx ${s.ctx}%`}</Text>
+                {tap('cx', <Text size="caption" dimColor tabular>{Svg ? `${s.ctx}%` : `ctx ${s.ctx}%`}</Text>)}
               </Box>
             ) : null}
             {bits}
@@ -781,6 +876,7 @@ export const register: Register = on => {
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
+            {finished.length > 0 && chip('c:done', CHIP_BLUE, BLUE, `${finished.length} finished`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
           </Box>
@@ -825,6 +921,16 @@ export const register: Register = on => {
             {needing.map(s => row(s, 0, `n:${s.id}`, true))}
           </Box>
         )}
+        {finished.length > 0 && (
+          <Box flexDirection="column">
+            <Box flexDirection="row" gap={1} alignItems="center" width="100%">
+              {icon(DOT_DONE, 'finished section', 10, '●', BLUE)}
+              <Box flexGrow={1} flexShrink={1}><Text size="footnote" weight="medium" color={BLUE}>Finished, not seen</Text></Box>
+              <Button key="seen-all" label="Mark all seen" plain dimColor onPress={() => void markSeen($, finished)} />
+            </Box>
+            {finished.map(s => row(s, 0, `f:${s.id}`, false, true))}
+          </Box>
+        )}
         {groups.length > 0 && (
           <Box flexDirection="row" gap={1} alignItems="center" paddingX={1} width="100%">
             <Box flexGrow={1} flexShrink={1}><Text size="caption" dimColor>Environment · session</Text></Box>
@@ -841,13 +947,14 @@ export const register: Register = on => {
           // working and waiting sessions always show; the rest fill up to the limit
           let room = limit
           const shown = g.items.filter(({ s }) => {
-            if (s.isRunning || s.waiting || s.isSelf) return true
+            if (s.isRunning || s.waiting || s.isSelf || isUnread(s)) return true
             if (room > 0) { room--; return true }
             return false
           })
           const extra = g.items.length - shown.length
           const busy = g.items.filter(({ s }) => s.isRunning).length
           const need = g.items.filter(({ s }) => s.waiting).length
+          const fresh = g.items.filter(({ s }) => isUnread(s)).length
           return (
             <Box key={`gw:${g.key}`} flexDirection="column" gap={1}>
             {g.key === firstStale && (
@@ -867,6 +974,7 @@ export const register: Register = on => {
                   {g.area ? <Text size="caption" dimColor wrap="truncate-end">{g.area}</Text> : null}
                 </Box>
                 {need > 0 && chip(`gn:${g.key}`, CHIP_AMBER, 'warning', `${need} need you`)}
+                {fresh > 0 && chip(`gf:${g.key}`, CHIP_BLUE, BLUE, `${fresh} finished`)}
                 {busy > 0 && chip(`gw:${g.key}`, CHIP_GREEN, 'success', `${busy} working`)}
                 <Box width={RC_W} flexShrink={0} />
                 <Box width={TIME_W} flexShrink={0} justifyContent="flex-end">
@@ -913,6 +1021,8 @@ export const register: Register = on => {
           <Box flexDirection="row" gap={1} alignItems="center">{mini('busy')}<Text size="caption" dimColor>Working</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, 'key: idle', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{Svg ? <Svg source={pulseDot(AMBER)} alt="key: needs you" width={10} height={10} /> : <Text color="warning">●</Text>}<Text size="caption" dimColor>Needs you</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_DONE, 'key: finished, not seen', 10, '●', BLUE)}<Text size="caption" dimColor>Finished, not seen</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(CHECKS, 'key: finished, seen', 14, '✓✓')}<Text size="caption" dimColor>Seen</Text></Box>
           <Box flexDirection="row" gap={1} alignItems="center">{icon(PHONE, 'key: remote', 12, 'RC')}<Text size="caption" dimColor>Remote</Text></Box>
           {LEGEND_PERMS.map(k => {
             const pi = PERM_ICON[k]

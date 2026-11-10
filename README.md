@@ -49,16 +49,17 @@ If you run several sessions at once and lose track of them in the sidebar, this 
 
 **Below the stage:**
 
-- **Counts:** pills for *need you*, *working* and *idle*.
+- **Counts:** pills for *need you*, *finished*, *working* and *idle*.
 - **Usage table:** your 5-hour and weekly limits as bars, with percent used and time until each resets.
 - **Needs you section:** pinned at the top. It shows sessions waiting for an approval or an answer, the reason, the question itself when available, and how long they've waited.
+- **Finished, not seen section:** sessions that finished a task without needing you and that you haven't looked at yet, like unread messages. Each shows a blue dot, the last line of its reply and when it finished, with a **Mark all seen** button.
 - **One card per project folder**, most recently active first:
   - a bold folder name, its area (for example `Personal` or `Work`) and counts
   - a fold arrow to collapse the card
   - a **"Show N more"** link when the project has more sessions than your per-project setting
 - **Sub-sessions** that another session started are indented under it, and the parent shows "3 helpers · 1 working".
 - **Each session row shows:**
-  - a status icon: grey ring for idle, a mini Clawd for working, a pulsing amber dot for needs you
+  - a status icon: grey ring for idle, a mini Clawd for working, a pulsing amber dot for needs you, a blue dot for finished but not seen, a grey double check for finished and seen
   - the title, which shimmers green while the session works; click it to open the session
   - a coloured **model badge** (Opus, Sonnet, Fable, Haiku), the **effort** level and the **permission mode** (icon and word)
   - a **context bar** for working sessions, plus "working 4m"
@@ -112,7 +113,8 @@ Clone the repo, then run `./scripts/use-plugin-dir.sh` from inside it. That back
  ^  ^                                     ^        ^
  |  title (click to open)                 |        last active
  status: o idle, mini Clawd working,      Remote Control on
-         amber dot needs you
+         amber dot needs you, blue dot finished (not seen),
+         double check finished (seen)
 ```
 
 ### Settings and controls
@@ -123,7 +125,8 @@ Clone the repo, then run `./scripts/use-plugin-dir.sh` from inside it. That back
 | **▾ / ▸** | Left of each project name | Fold or unfold that project |
 | **Show N more / Show less** | Bottom of a project card | Show the rest of that project's sessions |
 | **Refresh** | Top right | Refresh right away instead of waiting for the next automatic check |
-| **Click a title** | Any session row | Opens that session in the app |
+| **Click a title or any text on a row** | Any session row | Opens that session in the app (and marks it seen). The icons and the model badge aren't clickable. |
+| **Mark all seen** | The Finished, not seen section | Clears every blue dot at once |
 | `/sessions` | The chat box | Reopens the panel if you closed it |
 
 The panel refreshes on its own. It checks for changes every few seconds and redraws about once a minute, or sooner when something changes. It only reads sessions while the panel is open.
@@ -137,6 +140,9 @@ Look at the stage: there's one typing Clawd per working session, with its title 
 
 **"Did anything stop to ask me something?"**
 If anything is waiting, Clawd waves a "need you" sign and an amber **Needs you** section appears at the top of the list. Each entry shows the reason, such as *permission*, *question* or *your turn*, and how long it's been waiting. Click the title to jump straight there.
+
+**"Which sessions finished while I was away?"**
+They're in the blue **Finished, not seen** section, newest first, each with the last line of its reply. Click one to open it and the dot turns into a grey double check. Reading a session from the app's sidebar without replying doesn't count as seen: click it in the panel or use **Mark all seen**.
 
 **"Which session is close to running out of context?"**
 Working sessions show a small context bar that goes green, then amber, then red as it fills.
@@ -176,6 +182,7 @@ The note clears as soon as you reply, or when the session ends.
 - **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac.
 - **Writes:**
   - `~/.claude/session-following/waiting/<session-id>.json`, the "needs you" notes (one small file per session)
+  - `~/.claude/session-following/done/<session-id>.json`, the "finished" notes: when the turn ended, its last line, and whether you've seen it
   - `~/.claude/session-following/toasted/`, so the "is done" pop-up appears only once
   - your **Show per project** choice, in the mod's own settings store
 - **Runs:** `/usr/bin/open claude://...` when you click a title.
