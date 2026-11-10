@@ -657,14 +657,14 @@ export const register: Register = on => {
 
     const row = (s: Sess, depth: number, key: string, pinned: boolean) => {
       const ms = s.model ? modelStyle(s.model) : null
-      const h = helpers.get(s.id)
+      const kids = helpers.get(s.id)
       const small = (k: string, text: string, color?: string) => (
         <Text key={`${k}:${key}`} size="caption" dimColor={!color} color={color}>{text}</Text>
       )
       const bits = [
         s.effort ? small('e', s.effort) : null,
         s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
-        h ? small('h', `${h.n} helper${h.n === 1 ? '' : 's'}${h.w > 0 ? ` · ${h.w} working` : ''}`) : null,
+        kids ? small('h', `${kids.n} helper${kids.n === 1 ? '' : 's'}${kids.w > 0 ? ` · ${kids.w} working` : ''}`) : null,
         s.branch ? small('b', s.branch) : null,
       ].filter(Boolean)
       const hasDetail = !!ms || !!s.perm || s.ctx !== null || bits.length > 0
