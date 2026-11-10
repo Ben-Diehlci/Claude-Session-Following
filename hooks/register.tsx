@@ -327,8 +327,9 @@ async function poll($: EngineInterface): Promise<void> {
     const next: Snapshot = { checkedAt, sessions: rows, error: null, usage: planUsage(usageSelf), cheerUntil, cheerTitle: finished > 0 ? finishedTitle : prev.cheerTitle }
     // Redraw only when something changed (or about once a minute for the clock texts):
     // fewer redraws, and less chance of disturbing the person's scrolling.
-    const same = (x: Snapshot) => JSON.stringify([x.sessions, x.error, x.usage, x.cheerUntil, x.cheerTitle])
-    const fresh = prev.checkedAt !== '' && now - Date.parse(prev.checkedAt) < 50000
+    const calm = (x: Sess) => ({ ...x, lastActivityAt: (x.lastActivityAt || '').slice(0, 16) })
+    const same = (x: Snapshot) => JSON.stringify([x.sessions.map(calm), x.error, x.usage, x.cheerUntil, x.cheerTitle])
+    const fresh = prev.checkedAt !== '' && now - Date.parse(prev.checkedAt) < 60000
     if (!(fresh && same(prev) === same(next))) await update($, snap, () => next)
   } catch (err) {
     await update($, snap, s => (s.error === String(err).slice(0, 300) ? s : { ...s, checkedAt, error: String(err).slice(0, 300) }))
@@ -503,12 +504,14 @@ function toolBrief(tool: string, input: unknown): string {
 // The stage picture is rebuilt only when what it shows changes (who works, who waits,
 // cheering, hot). Handing the app the same markup on a refresh leaves the running
 // animation alone; new markup restarts it, which made the walking Clawd jump.
-let stageCache: { key: string; svg: string } | null = null
+let stageCache: { key: string; svg: string; at: number } | null = null
 function stableStage(input: StageInput): string {
-  const key = JSON.stringify({ w: input.working, n: input.waiting, c: input.cheerTitle, h: input.hot })
-  if (stageCache && stageCache.key === key) return stageCache.svg
+  // working titles in a fixed order, so sessions swapping places in the list don't count as a change
+  const key = JSON.stringify({ w: [...input.working].sort(), n: input.waiting, c: input.cheerTitle, h: input.hot })
+  // reuse for up to a minute; after that rebuild with current timings in case the app redrew it
+  if (stageCache && stageCache.key === key && input.now - stageCache.at < 60000) return stageCache.svg
   const svg = stageSvg(input)
-  stageCache = { key, svg }
+  stageCache = { key, svg, at: input.now }
   return svg
 }
 
@@ -773,7 +776,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {Svg
-          ? <Svg key="stage" source={stableStage(stageIn)} alt={stageText(stageIn)} />
+          ? <Svg key="stage" source={stableStage(stageIn)} alt={stageText(stageIn)} isInteractive />
           : <Text key="stage" dimColor>{stageText(stageIn)}</Text>}
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Box flexDirection="row" gap={1} alignItems="center">
