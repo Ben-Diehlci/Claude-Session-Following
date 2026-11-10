@@ -1,6 +1,6 @@
 {
   "name": "session-following",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Side pane listing all Claude desktop sessions by project folder, with status, detail lines, usage bar, needs-you alerts and Clawd",
   "types": "./types/index.d.ts",
   "license": "MIT"
