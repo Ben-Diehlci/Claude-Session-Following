@@ -16,7 +16,8 @@ const blink = (dur: string, from = 1, to = 0.15) =>
   `<animate attributeName="opacity" values="${from};${to};${from}" dur="${dur}" repeatCount="indefinite"/>`
 
 export function clawd(mood: Mood, w: number, h: number): string {
-  const legs = [3, 5, 10, 12].map(x => r(x, 9, 1, 3, BODY)).join('')
+  // four evenly spaced legs under the body
+  const legs = [3, 6, 9, 12].map(x => r(x, 9, 1, 2, BODY)).join('')
   let top = ''
   switch (mood) {
     case 'busy':

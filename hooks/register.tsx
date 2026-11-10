@@ -417,10 +417,13 @@ function buildGroups(all: Sess[]): Group[] {
   }
   const seen = new Set<string>()
   for (const r of roots.sort(byRecent)) {
-    const key = r.cwd
+    const scratch = /^scratch-\d{4}-\d{2}-\d{2}/.test(folderName(r.cwd))
+    const key = scratch ? 'scratch' : r.cwd
     let g = groups.get(key)
     if (!g) {
-      g = { key, name: folderName(r.cwd), area: areaName(r.cwd), latest: 0, items: [] }
+      g = scratch
+        ? { key, name: 'Scratch sessions', area: 'no project folder', latest: 0, items: [] }
+        : { key, name: folderName(r.cwd), area: areaName(r.cwd), latest: 0, items: [] }
       groups.set(key, g)
     }
     walk(r, 0, g, seen)
@@ -794,7 +797,7 @@ export const register: Register = on => {
         {needing.length > 0 && (
           <Box flexDirection="column">
             <Box flexDirection="row" gap={1} alignItems="center">
-              {Svg ? <Svg source={pulseDot(AMBER)} alt="" width={10} height={10} /> : <Text color="warning">●</Text>}
+              {Svg ? <Svg source={pulseDot(AMBER)} alt="needs you section" width={10} height={10} /> : <Text color="warning">●</Text>}
               <Text size="footnote" weight="medium" color="warning">Needs you</Text>
             </Box>
             {needing.map(s => row(s, 0, `n:${s.id}`, true))}
@@ -836,7 +839,7 @@ export const register: Register = on => {
                   label={isCollapsed ? '▸' : '▾'}
                   onPress={() => void update($, view, x => ({ ...x, collapsed: toggle(x.collapsed, g.key) }))}
                 />
-                {icon(FOLDER, '', 14, '')}
+                {icon(FOLDER, `folder ${g.name}`, 14, '')}
                 <Box flexGrow={1} flexShrink={1} flexDirection="row" gap={1} alignItems="center">
                   <Text weight="semibold" wrap="truncate-end">{g.name}</Text>
                   {g.area ? <Text size="caption" dimColor wrap="truncate-end">{g.area}</Text> : null}
@@ -886,13 +889,13 @@ export const register: Register = on => {
         </Box>
         <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
           <Box flexDirection="row" gap={1} alignItems="center">{mini('busy')}<Text size="caption" dimColor>Working</Text></Box>
-          <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, '', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>
-          <Box flexDirection="row" gap={1} alignItems="center">{Svg ? <Svg source={pulseDot(AMBER)} alt="" width={10} height={10} /> : <Text color="warning">●</Text>}<Text size="caption" dimColor>Needs you</Text></Box>
-          <Box flexDirection="row" gap={1} alignItems="center">{icon(PHONE, '', 12, 'RC')}<Text size="caption" dimColor>Remote</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(DOT_IDLE, 'key: idle', 10, '○')}<Text size="caption" dimColor>Idle</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{Svg ? <Svg source={pulseDot(AMBER)} alt="key: needs you" width={10} height={10} /> : <Text color="warning">●</Text>}<Text size="caption" dimColor>Needs you</Text></Box>
+          <Box flexDirection="row" gap={1} alignItems="center">{icon(PHONE, 'key: remote', 12, 'RC')}<Text size="caption" dimColor>Remote</Text></Box>
           {LEGEND_PERMS.map(k => {
             const pi = PERM_ICON[k]
             return pi ? (
-              <Box key={`lp:${k}`} flexDirection="row" gap={1} alignItems="center">{icon(pi.svg, '', 12, pi.glyph)}<Text size="caption" dimColor>{pi.label}</Text></Box>
+              <Box key={`lp:${k}`} flexDirection="row" gap={1} alignItems="center">{icon(pi.svg, `key: ${pi.label}`, 12, pi.glyph)}<Text size="caption" dimColor>{pi.label}</Text></Box>
             ) : null
           })}
           <Text size="caption" dimColor>
