@@ -63,6 +63,7 @@ If you run several sessions at once and lose track of them in the sidebar, this 
   - the title, which shimmers green while the session works; click it to open the session
   - a coloured **model badge** (Opus, Sonnet, Fable, Haiku), the **effort** level and the **permission mode** (icon and word)
   - a **context bar** for working sessions, plus "working 4m"
+  - "1 background task" when the reply has ended but a helper agent or background command is still running (the session still counts as working)
   - a phone icon if **Remote Control** is on, and how long ago the session was last **active**
 - **Older projects:** projects with no activity for 7+ days are folded and moved to the bottom.
 - **Scratch sessions:** sessions started without a project folder (`scratch-YYYY-MM-DD-...`) share one card.
@@ -201,6 +202,8 @@ The desktop app doesn't report "waiting on you", so each session's own copy of t
 
 The note clears as soon as you reply, or when the session ends.
 
+A session that is waiting on you counts under **need you**, not **working**, even though the app still reports it as running while a question or permission prompt is open. So it never shows twice, and Clawd doesn't sit typing at a desk for it.
+
 **Limits:**
 - Only sessions started **after** the mod was installed (and the app restarted) can flag themselves.
 - The permission mode is only reported for the current session and sessions it started, so other rows don't show a mode.
@@ -304,7 +307,7 @@ Type-check with TypeScript 5.4+ using the `tsconfig.json` the app writes beside 
 
 ## Status and credits
 
-- **Version 0.5.1.** In daily use by its author. Mods are early access in Claude Code, so expect occasional breakage after app updates.
+- **Version 0.5.3.** In daily use by its author. Mods are early access in Claude Code, so expect occasional breakage after app updates.
 - **License:** [MIT](LICENSE). Use, change and share it freely; keep the copyright notice.
 - **Clawd** is Anthropic's Claude Code mascot. The pixel drawings here are an unofficial fan-made version. This project isn't affiliated with or endorsed by Anthropic.
 - The animated stage technique (SMIL with wall-clock offsets) follows the author's [Lines Tracker](https://github.com/Ben-Diehlci/Claude-CodedLinesTracker) mod, which counts the lines of code Claude writes.
