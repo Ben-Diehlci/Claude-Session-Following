@@ -1,0 +1,1 @@
+{ "name": "session-following", "version": "0.1.0", "description": "Side pane listing all Claude desktop sessions by project folder, with status and sub-sessions", "types": "./types/index.d.ts" }
