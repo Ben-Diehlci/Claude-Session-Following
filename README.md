@@ -249,6 +249,6 @@ Type-check with TypeScript 5.4+ using the `tsconfig.json` the app writes beside 
 ## Status and credits
 
 - **Version 0.4.0.** In daily use by its author. Mods are early access in Claude Code, so expect occasional breakage after app updates.
-- **License:** none yet. Add one before sharing publicly.
+- **License:** [MIT](LICENSE). Use, change and share it freely; keep the copyright notice.
 - **Clawd** is Anthropic's Claude Code mascot. The pixel drawings here are an unofficial fan-made version. This project isn't affiliated with or endorsed by Anthropic.
 - The animated stage technique (SMIL with wall-clock offsets) follows the author's *Claude Coded Lines Tracker* mod.
