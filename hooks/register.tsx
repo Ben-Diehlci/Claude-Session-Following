@@ -251,9 +251,9 @@ async function poll($: EngineInterface): Promise<void> {
       const have = rows.find(r => r.id === selfRaw.sessionId)
       if (have) have.isSelf = true
       else {
-        const me = toSess(selfRaw, true)
-        me.isRunning = true
-        rows.push(me)
+        // list_sessions always leaves out the asking session; get_session('self')
+        // carries its real isRunning, so trust it rather than forcing "working".
+        rows.push(toSess(selfRaw, true))
       }
     }
     const usageSelf = await callJson<UsageRes>($, 'get_usage', { session_id: 'self' })
