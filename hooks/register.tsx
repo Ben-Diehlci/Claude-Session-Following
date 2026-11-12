@@ -54,6 +54,8 @@ type Detail = { model: string; effort: string; branch: string; perm: string }
 const detailCache = new Map<string, { at: number; d: Detail }>()
 const runStart = new Map<string, number>()
 const activeWaits = new Set<string>()
+// tool calls still in progress; a permission check counts only while its call is
+const runningCalls = new Set<string>()
 let wrapAsk = ''
 
 function textOf(res: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
@@ -180,10 +182,12 @@ async function baseDir($: EngineInterface): Promise<string> {
 let selfMode = ''
 let selfModeAt = 0
 async function getSelfMode($: EngineInterface): Promise<string> {
-  if (Date.now() - selfModeAt < 60000) return selfMode
+  // Plan mode (and an unread mode) can change any moment, by a plan approval: never reuse it.
+  if (selfMode && selfMode !== 'plan' && Date.now() - selfModeAt < 15000) return selfMode
   const raw = await callJson<Obj>($, 'get_session', { session_id: 'self' })
-  selfModeAt = Date.now()
+  // In plan mode the app refuses this read; keep it unknown rather than remembering it.
   selfMode = raw && typeof raw.permissionMode === 'string' ? raw.permissionMode : ''
+  selfModeAt = Date.now()
   return selfMode
 }
 
@@ -769,6 +773,14 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const id = e.tool_use_id
     const args = e as unknown as Obj
+    runningCalls.add(id)
+    // The main thread moved on to another tool, so any permission prompt whose own call
+    // is not running here was answered (approved plans never reach this hook's finally).
+    if (!e.agentId) {
+      let dropped = false
+      for (const w of activeWaits) if (!runningCalls.has(w)) { activeWaits.delete(w); dropped = true }
+      if (dropped && activeWaits.size === 0) void writeFlag($, null)
+    }
     if (e.tool === 'AskUserQuestion') {
       const qs = Array.isArray(args.questions) ? args.questions : []
       const first = isObj(qs[0]) ? qs[0] : {}
@@ -792,6 +804,7 @@ export const register: Register = on => {
       if (stopId && bgShells.delete(stopId)) void bgCheck($)
       return out
     } finally {
+      runningCalls.delete(id)
       if (activeWaits.delete(id) && activeWaits.size === 0) void writeFlag($, null)
     }
   })
@@ -828,6 +841,7 @@ export const register: Register = on => {
       return next(e)
     }
     wrapAsk = ''
+    activeWaits.clear()
     // I replied here, so I've seen how it finished; the next turn end marks it again
     void getSelfId($).then(id => writeDone($, id, null))
     void writeFlag($, null)
