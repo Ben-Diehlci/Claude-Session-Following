@@ -26,7 +26,6 @@ const AMBER = '#EF9F27'
 const BLUE = '#378ADD'
 const PINK = '#D4537E'
 const DESKS_MAX = 4
-const DESK_X0 = 112
 const DESK_W = 112
 const FONT = 'font-family="system-ui, sans-serif"'
 
@@ -95,7 +94,7 @@ const slide = (values: string, keyTimes: string, ms: number, now: number): strin
 const desk = (x0: number, title: string, now: number, k: number): string => {
   const typing = `<animateTransform attributeName="transform" type="translate" values="0 0;0 1;0 0"${rep(400)}${begin(now, 400, k * 130)}/>`
   return (
-    `<text x="${num(x0 + 36)}" y="11" text-anchor="middle" font-size="8.5" ${FONT} fill="${GREY}">${esc(clip(title, 22))}</text>` +
+    `<text x="${num(x0 + 36)}" y="11" text-anchor="middle" font-size="10" ${FONT} fill="${GREY}">${esc(clip(title, 19))}</text>` +
     place(x0 + 6, standing(now, {}), '', typing) +
     r(x0, 48, 72, 3, '#8A6A4A') + r(x0 + 4, 51, 3, 7, '#8A6A4A') + r(x0 + 65, 51, 3, 7, '#8A6A4A') +
     r(x0 + 40, 46, 30, 2, '#5F5E5A') +
@@ -104,12 +103,12 @@ const desk = (x0: number, title: string, now: number, k: number): string => {
   )
 }
 
-const confetti = (now: number): string => {
+const confetti = (now: number, w: number): string => {
   const cols = [AMBER, GREEN, BLUE, PINK]
   let o = ''
   for (let i = 0; i < 18; i++) {
     const ms = 2000 + (i % 4) * 400
-    const x = 8 + ((i * 97) % 580)
+    const x = 8 + ((i * 97) % Math.max(20, w - 20))
     const drift = (i % 2 ? 1 : -1) * (6 + (i % 5) * 3)
     o +=
       `<rect x="${x}" y="-4" width="${3 + (i % 2)}" height="${3 + ((i + 1) % 2)}" fill="${cols[i % 4]}">` +
@@ -130,12 +129,17 @@ const zs = (now: number): string => {
   return o
 }
 
-export const stageSvg = (input: StageInput): string => {
+/** `width` is the strip's pixel width (the pane's), at most STAGE_W; the scene is laid out to fit it. */
+export const stageSvg = (input: StageInput, width = STAGE_W): string => {
   const now = Number.isFinite(input.now) ? input.now : 0
+  const W = Math.max(200, Math.min(STAGE_W, Math.round(width)))
+  const desksMax = Math.max(1, Math.min(DESKS_MAX, Math.floor((W - 40) / DESK_W)))
+  const mid = Math.round(W / 2) - 16
   const scene = stageScene(input)
   const hot = input.hot ? hotBits(now) : ''
-  const shown = input.working.slice(0, DESKS_MAX)
-  let o = r(0, FLOOR, STAGE_W, 1, GREY, ' opacity="0.45"')
+  const shown = input.working.slice(0, desksMax)
+  const deskX0 = Math.max(4, Math.round((W - shown.length * DESK_W) / 2) + 20)
+  let o = r(0, FLOOR, W, 1, GREY, ' opacity="0.45"')
 
   if (scene === 'quiet') {
     // 30 s window: asleep until 80 percent, then up for a short lap, then back to bed.
@@ -144,16 +148,16 @@ export const stageSvg = (input: StageInput): string => {
       `<animate attributeName="visibility" calcMode="discrete" values="${a};${b}" keyTimes="0;0.8"${rep(ms)}${begin(now, ms)}/>`
     const lap = slide('0 0;0 0;80 0;0 0', '0;0.8;0.9;1', ms, now)
     o +=
-      `<g>${vis('visible', 'hidden')}${place(280, sleeping(), zs(now) + hot)}</g>` +
-      `<g visibility="hidden">${vis('hidden', 'visible')}${place(280, standing(now, { legs: 'walk' }), hot, lap)}</g>`
+      `<g>${vis('visible', 'hidden')}${place(mid, sleeping(), zs(now) + hot)}</g>` +
+      `<g visibility="hidden">${vis('hidden', 'visible')}${place(mid, standing(now, { legs: 'walk' }), hot, lap)}</g>`
   } else {
     if (scene === 'working') {
       // one Clawd strolling there and back behind the desks
-      o += place(10, standing(now, { legs: 'walk' }), hot, slide('0 0;540 0;0 0', '0;0.5;1', 24000, now))
+      o += place(10, standing(now, { legs: 'walk' }), hot, slide(`0 0;${W - 60} 0;0 0`, '0;0.5;1', 24000, now))
     }
-    shown.forEach((t, k) => (o += desk(DESK_X0 + k * DESK_W, t, now, k)))
-    if (input.working.length > DESKS_MAX)
-      o += `<text x="${STAGE_W - 4}" y="52" text-anchor="end" font-size="9" ${FONT} fill="${GREY}">+${input.working.length - DESKS_MAX} more</text>`
+    shown.forEach((t, k) => (o += desk(deskX0 + k * DESK_W, t, now, k)))
+    if (input.working.length > desksMax)
+      o += `<text x="${W - 4}" y="30" text-anchor="end" font-size="10" ${FONT} fill="${GREY}">+${input.working.length - desksMax} more</text>`
     if (scene === 'waiting') {
       const label = `${input.waiting} need you`
       const sw = Math.max(54, label.length * 6 + 12)
@@ -161,17 +165,18 @@ export const stageSvg = (input: StageInput): string => {
         `<g transform="translate(30 -22)">${r(0, 0, sw, 16, '#FAEEDA', ` rx="3" stroke="${AMBER}" stroke-width="1.5"`)}` +
         `<text x="${num(sw / 2)}" y="11.5" text-anchor="middle" font-size="10" font-weight="700" ${FONT} fill="#854F0B">${esc(label)}</text>` +
         `${r(sw / 2 - 1, 16, 2, 4, '#854F0B')}</g>`
-      const dash = slide('0 0;470 0;470 0;0 0;0 0', '0;0.45;0.5;0.95;1', 6000, now)
+      const far = Math.max(0, W - sw - 50)
+      const dash = slide(`0 0;${far} 0;${far} 0;0 0;0 0`, '0;0.45;0.5;0.95;1', 6000, now)
       o += place(10, standing(now, { arms: 'wave', legs: 'walk' }), sign + hot, dash)
     } else if (scene === 'cheer') {
       const jump = `<animateTransform attributeName="transform" type="translate" values="0 0;0 -14;0 0" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.3 0 0.7 1;0.3 0 0.7 1"${rep(700)}${begin(now, 700)}/>`
-      const title = clip(input.cheerTitle ?? '', 30)
+      const title = clip(input.cheerTitle ?? '', Math.max(8, Math.min(30, Math.floor((W - 96) / 7) - 8)))
       o += place(40, standing(now, { arms: 'up' }), hot, jump)
       o += `<text x="86" y="29" font-size="12" font-weight="700" ${FONT} fill="${GREEN}">${esc(title ? `${title} is done` : 'Done')}</text>`
-      o += confetti(now)
+      o += confetti(now, W)
     }
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STAGE_W}" height="${STAGE_H}" viewBox="0 0 ${STAGE_W} ${STAGE_H}" shape-rendering="crispEdges">${o}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${STAGE_H}" viewBox="0 0 ${W} ${STAGE_H}" shape-rendering="crispEdges">${o}</svg>`
 }
 
 /** Short description for the Svg alt text and the terminal fallback. */

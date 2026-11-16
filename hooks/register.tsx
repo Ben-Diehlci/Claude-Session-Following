@@ -3,7 +3,7 @@ import type { Register, EngineInterface, Timer, RenderNode } from 'claude-code'
 
 import type { View, Sess, Snapshot, Usage, Waiting, WaitReason, Done } from '../types'
 import { clawd, pulseDot, usageBar, type Mood } from './clawd'
-import { stageSvg, stageText, type StageInput } from './stage'
+import { stageSvg, stageText, STAGE_H, STAGE_W, type StageInput } from './stage'
 import type { ShimmerProps } from './shimmer'
 
 const PANE = 'session-following'
@@ -645,13 +645,32 @@ const GROUP_HEAD_BG = 'rgba(128,128,128,0.10)'
 // Box widths are in character cells, not pixels (Svg width/height are pixels).
 const TIME_W = 7
 const RC_W = 7
-const MODEL_STYLE: Record<string, { bg: string; fg: string }> = {
-  opus: { bg: 'rgba(216,90,48,0.16)', fg: '#993C1D' },
-  sonnet: { bg: 'rgba(55,138,221,0.16)', fg: '#185FA5' },
-  fable: { bg: 'rgba(127,119,221,0.18)', fg: '#534AB7' },
-  haiku: { bg: 'rgba(29,158,117,0.16)', fg: '#0F6E56' },
+// Pane width breakpoints, in character cells (e.props.bodyColumns).
+const NARROW_COLS = 56 // below: no Remote column, no "resets in", short chip words, two-line Needs-you rows
+const TIGHT_COLS = 42 // below: no area caption next to project names, smaller usage labels
+const MICRO_COLS = 30 // below: the time goes under the title, project chips show just the number
+const DEFAULT_COLS = 60 // when the app doesn't say (older app versions)
+// Rough pixels per cell in the desktop app (measured about 10), kept a little low so
+// pictures never overflow the pane.
+const CELL_PX = 9
+// Letters of normal (proportional) text that fit in one cell: about 1.4 in the desktop app.
+const TEXT_PER_CELL = 1.4
+// The model colour is the chip's background; the text stays the normal text colour
+// so it reads in light and dark mode alike (dark red on dark red was unreadable).
+const MODEL_STYLE: Record<string, { bg: string; fg?: string }> = {
+  opus: { bg: 'rgba(216,90,48,0.30)' },
+  sonnet: { bg: 'rgba(55,138,221,0.30)' },
+  fable: { bg: 'rgba(127,119,221,0.32)' },
+  haiku: { bg: 'rgba(29,158,117,0.30)' },
 }
-const MODEL_OTHER = { bg: 'rgba(128,128,128,0.16)', fg: '#5F5E5A' }
+const MODEL_OTHER: { bg: string; fg?: string } = { bg: 'rgba(128,128,128,0.24)' }
+
+/** Cells across the pane body; DEFAULT_COLS when the app doesn't pass it. */
+function paneCols(e: unknown): number {
+  const props = isObj(e) && isObj(e.props) ? e.props : null
+  const c = props && typeof props.bodyColumns === 'number' ? props.bodyColumns : 0
+  return c > 0 ? Math.floor(c) : DEFAULT_COLS
+}
 const modelStyle = (id: string) => MODEL_STYLE[/^claude-([a-z]+)/.exec(id)?.[1] ?? ''] ?? MODEL_OTHER
 const PERM_INK = '#5F5E5A'
 const pst = (d: string, c = PERM_INK) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`
@@ -698,12 +717,12 @@ function toolBrief(tool: string, input: unknown): string {
 // cheering, hot). Handing the app the same markup on a refresh leaves the running
 // animation alone; new markup restarts it, which made the walking Clawd jump.
 let stageCache: { key: string; svg: string; at: number } | null = null
-function stableStage(input: StageInput): string {
+function stableStage(input: StageInput, width: number): string {
   // working titles in a fixed order, so sessions swapping places in the list don't count as a change
-  const key = JSON.stringify({ w: [...input.working].sort(), n: input.waiting, c: input.cheerTitle, h: input.hot })
+  const key = JSON.stringify({ w: [...input.working].sort(), n: input.waiting, c: input.cheerTitle, h: input.hot, px: width })
   // reuse for up to a minute; after that rebuild with current timings in case the app redrew it
   if (stageCache && stageCache.key === key && input.now - stageCache.at < 60000) return stageCache.svg
-  const svg = stageSvg(input)
+  const svg = stageSvg(input, width)
   stageCache = { key, svg, at: input.now }
   return svg
 }
@@ -870,6 +889,10 @@ export const register: Register = on => {
         : <Text color={color} dimColor={!color}>{glyph}</Text>
     const p = await read($, snap)
     const v = await read($, view)
+    const cols = paneCols(e)
+    const narrow = cols < NARROW_COLS
+    const tight = cols < TIGHT_COLS
+    const micro = cols < MICRO_COLS
     const now = Date.now()
     const cutoff = now - RECENT_DAYS * 86400000
     void cutoff
@@ -897,8 +920,11 @@ export const register: Register = on => {
 
     // At most SHIMMER_MAX rows shimmer; the rest get still green text.
     let shimmering = 0
-    const title = (s: Sess, k: string) => {
-      const label = clip(s.isSelf ? `${s.title} (this one)` : s.title, 48)
+    // Titles are cut to one line by hand (a Button label wraps word by word otherwise).
+    const title = (s: Sess, k: string, room: number) => {
+      // the shimmer draws in a slightly wider font, so a working title gets a little less
+      const fit = Math.floor(room * TEXT_PER_CELL * (s.isRunning && Client ? 0.85 : 1))
+      const label = clip(s.isSelf && !micro ? `${s.title} (this one)` : s.title, Math.max(6, Math.min(48, fit)))
       if (s.isRunning && Client) {
         const wave = shimmering < SHIMMER_MAX
         shimmering++
@@ -954,13 +980,18 @@ export const register: Register = on => {
       // so each text piece gets its own plain Button (icons and badges can't).
       const tap = (k: string, node: RenderNode) =>
         s.link ? <Button key={`t:${k}:${key}`} plain onPress={() => void openSession($, s)}>{node}</Button> : node
-      const small = (k: string, text: string, color?: string) =>
-        tap(k, <Text key={`${k}:${key}`} size="caption" dimColor={!color} color={color}>{text}</Text>)
+      // Each detail stays whole (never shrinks or breaks inside); the line wraps between them.
+      const metaRoom = Math.max(12, Math.floor((cols - 6 - depth * 2) * TEXT_PER_CELL))
+      const small = (k: string, text: string, color?: string) => (
+        <Box key={`${k}:${key}`} flexShrink={0}>
+          {tap(k, <Text size="caption" dimColor={!color} color={color}>{clip(text, metaRoom)}</Text>)}
+        </Box>
+      )
       const bits = [
         s.effort ? small('e', s.effort) : null,
         s.isRunning && s.workingSince ? small('w', `working ${dur(now - s.workingSince)}`, GREEN) : null,
         s.bg > 0
-          ? small('bg', `${s.bg} background task${s.bg === 1 ? '' : 's'}${s.bgLabel ? `: ${s.bgLabel}` : ''}`, GREEN)
+          ? small('bg', `${s.bg} ${narrow ? 'bg' : 'background'} task${s.bg === 1 ? '' : 's'}${s.bgLabel ? `: ${s.bgLabel}` : ''}`, GREEN)
           : null,
         kids ? small('h', `${kids.n} helper${kids.n === 1 ? '' : 's'}${kids.w > 0 ? ` · ${kids.w} working` : ''}`) : null,
         s.branch ? small('b', s.branch) : null,
@@ -969,6 +1000,22 @@ export const register: Register = on => {
           : null,
       ].filter(Boolean)
       const hasDetail = !!ms || !!s.perm || s.ctx !== null || bits.length > 0
+      const need = pinned && s.waiting ? s.waiting : null
+      // narrow pane: the reason badge and the time go on a second line so the title keeps the room
+      const twoLine = (narrow && (!!need || fin)) || micro
+      // very narrow ordinary rows: the time leads the detail line instead of taking a row of its own
+      const timeInMeta = micro && !need && !fin && hasDetail
+      const timeW = need || fin ? TIME_W + 6 : TIME_W
+      const reasonW = need ? REASON[need.reason].length + 3 : 0
+      // cells left for the title: padding, corner, status icon, gaps, then the right-hand columns
+      const room = cols - 2 - depth * 2 - (depth > 0 ? 3 : 0) - 3
+        - (twoLine ? 0 : timeW + 1 + reasonW)
+        - (narrow ? (s.remote ? 3 : 0) : RC_W + 1)
+      const timeNode = tap('time', (
+        <Text dimColor={!fin} color={fin ? BLUE : undefined} size="caption" tabular>
+          {need ? waitingFor(need, now) : fin && s.done ? `done ${ago(s.done.at, now)}` : ago(s.lastActivityAt, now)}
+        </Text>
+      ))
       return (
       <Box
         key={key}
@@ -981,17 +1028,21 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={1} alignItems="center" width="100%">
           {depth > 0 && icon(CORNER, 'started by the session above', 12, '↳')}
           {statusIcon(s)}
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : fin ? 'f' : 's')}</Box>
-          {pinned && s.waiting && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[s.waiting.reason])}
-          <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>
-          <Box width={(pinned && s.waiting) || fin ? TIME_W + 6 : TIME_W} flexShrink={0} justifyContent="flex-end">
-            {tap('time', (
-              <Text dimColor={!fin} color={fin ? BLUE : undefined} size="caption" tabular>
-                {pinned && s.waiting ? waitingFor(s.waiting, now) : fin && s.done ? `done ${ago(s.done.at, now)}` : ago(s.lastActivityAt, now)}
-              </Text>
-            ))}
-          </Box>
+          {/* wide Needs-you rows: the badge sits right after the title, the gap goes after it */}
+          <Box flexGrow={need && !twoLine ? 0 : 1} flexShrink={1} minWidth={0}>{title(s, pinned ? 'n' : fin ? 'f' : 's', room)}</Box>
+          {need && !twoLine && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[need.reason])}
+          {need && !twoLine && <Box flexGrow={1} />}
+          {narrow
+            ? (s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null)
+            : <Box width={RC_W} flexShrink={0} justifyContent="center">{s.remote ? icon(PHONE, 'Remote Control on', 12, 'RC') : null}</Box>}
+          {!twoLine && <Box width={timeW} flexShrink={0} justifyContent="flex-end">{timeNode}</Box>}
         </Box>
+        {twoLine && !timeInMeta ? (
+          <Box paddingLeft={3} flexDirection="row" gap={1} alignItems="center">
+            {need && chip(`r:${key}`, CHIP_AMBER, 'warning', REASON[need.reason])}
+            {timeNode}
+          </Box>
+        ) : null}
         {pinned && s.waiting?.question ? (
           <Box paddingLeft={3}>{tap('q', <Text size="caption" color="warning" wrap="truncate-end">{s.waiting.question}</Text>)}</Box>
         ) : null}
@@ -1000,7 +1051,12 @@ export const register: Register = on => {
         ) : null}
         {hasDetail ? (
           <Box paddingLeft={3} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-            {ms ? chip(`m:${key}`, ms.bg, ms.fg, shortModel(s.model)) : null}
+            {timeInMeta ? <Box key={`tm:${key}`} flexShrink={0}>{timeNode}</Box> : null}
+            {ms ? (
+              <Box key={`m:${key}`} backgroundColor={ms.bg} paddingX={1} flexShrink={0}>
+                <Text size="caption" weight="medium" color={ms.fg}>{shortModel(s.model)}</Text>
+              </Box>
+            ) : null}
             {s.perm ? (
               <Box key={`p:${key}`} flexDirection="row" gap={1} alignItems="center">
                 {permIcon(s.perm)}
@@ -1030,20 +1086,29 @@ export const register: Register = on => {
       cheerTitle: p.cheerUntil > now ? p.cheerTitle || 'A session' : null,
       hot: p.usage.some(x => x.percent > 80),
     }
+    // drawn at the pane's own width so it isn't shrunk (tiny labels, empty space above and below)
+    const stageW = Math.max(200, Math.min(STAGE_W, (cols - 1) * CELL_PX))
+    // usage rows: label, bar, percent, then "resets in" when there is room
+    const usageLabelW = tight ? 10 : narrow ? 14 : 20
+    const resetsW = narrow ? 0 : 18
+    const usageBarPx = Math.max(40, Math.min(140, (cols - usageLabelW - 5 - 4 - resetsW) * CELL_PX))
 
     return (
       <Box flexDirection="column" gap={1}>
         {Svg
-          ? <Svg key="stage" source={stableStage(stageIn)} alt={stageText(stageIn)} isInteractive />
+          ? <Svg key="stage" source={stableStage(stageIn, stageW)} alt={stageText(stageIn)} width={stageW} height={STAGE_H} isInteractive />
           : <Text key="stage" dimColor>{stageText(stageIn)}</Text>}
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-          <Box flexDirection="row" gap={1} alignItems="center">
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+          {/* the count chips wrap onto a second line rather than pushing Refresh off the edge */}
+          <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap" flexShrink={1} minWidth={0}>
             {needing.length > 0 && chip('c:need', CHIP_AMBER, 'warning', `${needing.length} need you`)}
             {finished.length > 0 && chip('c:done', CHIP_BLUE, BLUE, `${finished.length} finished`)}
             {chip('c:work', CHIP_GREEN, 'success', `${working} working`)}
             {chip('c:idle', CHIP_GREY, undefined, `${recent.length - working} idle`)}
           </Box>
-          <Button key="refresh" label="Refresh" plain dimColor onPress={() => void poll($)} />
+          <Box flexShrink={0}>
+            <Button key="refresh" label={narrow ? '↻' : 'Refresh'} plain dimColor onPress={() => void poll($)} />
+          </Box>
         </Box>
         {longest && (
           <Text size="caption" color="warning">{`longest waiting: ${dur(now - Date.parse(longest.since))}`}</Text>
@@ -1054,14 +1119,14 @@ export const register: Register = on => {
               const c = w.percent > 80 ? RED : w.percent >= 60 ? AMBER : GREEN
               return (
                 <Box key={`u:${i}`} flexDirection="row" gap={1} alignItems="center" width="100%">
-                  <Box width={20} flexShrink={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
+                  <Box width={usageLabelW} flexShrink={1} minWidth={0}><Text size="caption" dimColor wrap="truncate-end">{w.label}</Text></Box>
                   <Box flexShrink={0}>
                     {Svg
-                      ? <Svg source={usageBar(w.percent, 140, c)} alt={`${w.percent} percent of ${w.label} used`} width={140} height={6} />
+                      ? <Svg source={usageBar(w.percent, usageBarPx, c)} alt={`${w.percent} percent of ${w.label} used${w.resetsIn ? `, resets in ${w.resetsIn}` : ''}`} width={usageBarPx} height={6} />
                       : <Text size="caption" color={c}>{'█'.repeat(Math.round(w.percent / 10)) + '░'.repeat(10 - Math.round(w.percent / 10))}</Text>}
                   </Box>
                   <Box width={5} flexShrink={0} justifyContent="flex-end"><Text size="caption" weight="medium" tabular>{`${w.percent}%`}</Text></Box>
-                  <Box flexGrow={1} flexShrink={1}><Text size="caption" dimColor tabular wrap="truncate-end">{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>
+                  {resetsW > 0 && <Box flexGrow={1} flexShrink={1} minWidth={0}><Text size="caption" dimColor tabular wrap="truncate-end">{w.resetsIn ? `resets in ${w.resetsIn}` : ''}</Text></Box>}
                 </Box>
               )
             })}
@@ -1094,9 +1159,9 @@ export const register: Register = on => {
             {finished.map(s => row(s, 0, `f:${s.id}`, false, true))}
           </Box>
         )}
-        {groups.length > 0 && (
+        {groups.length > 0 && !narrow && (
           <Box flexDirection="row" gap={1} alignItems="center" paddingX={1} width="100%">
-            <Box flexGrow={1} flexShrink={1}><Text size="caption" dimColor>Environment · session</Text></Box>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}><Text size="caption" dimColor wrap="truncate-end">Environment · session</Text></Box>
             <Box width={RC_W} flexShrink={0} justifyContent="center"><Text size="caption" dimColor>Remote</Text></Box>
             <Box width={TIME_W} flexShrink={0} justifyContent="flex-end"><Text size="caption" dimColor>Active</Text></Box>
           </Box>
@@ -1132,15 +1197,15 @@ export const register: Register = on => {
                   onPress={() => void update($, view, x => ({ ...x, collapsed: toggle(x.collapsed, g.key) }))}
                 />
                 {icon(FOLDER, `folder ${g.name}`, 14, '')}
-                <Box flexGrow={1} flexShrink={1} flexDirection="row" gap={1} alignItems="center">
-                  <Text weight="semibold" wrap="truncate-end">{g.name}</Text>
-                  {g.area ? <Text size="caption" dimColor wrap="truncate-end">{g.area}</Text> : null}
+                <Box flexGrow={1} flexShrink={1} minWidth={Math.min(10, Math.max(4, cols - 14))} flexDirection="row" gap={1} alignItems="center">
+                  <Box flexShrink={1} minWidth={0}><Text weight="semibold" wrap="truncate-end">{g.name}</Text></Box>
+                  {g.area && !tight ? <Box flexShrink={2} minWidth={0}><Text size="caption" dimColor wrap="truncate-end">{g.area}</Text></Box> : null}
                 </Box>
-                {need > 0 && chip(`gn:${g.key}`, CHIP_AMBER, 'warning', `${need} need you`)}
-                {fresh > 0 && chip(`gf:${g.key}`, CHIP_BLUE, BLUE, `${fresh} finished`)}
-                {busy > 0 && chip(`gw:${g.key}`, CHIP_GREEN, 'success', `${busy} working`)}
-                <Box width={RC_W} flexShrink={0} />
-                <Box width={TIME_W} flexShrink={0} justifyContent="flex-end">
+                {need > 0 && chip(`gn:${g.key}`, CHIP_AMBER, 'warning', micro ? `${need}` : narrow ? `${need} need` : `${need} need you`)}
+                {fresh > 0 && chip(`gf:${g.key}`, CHIP_BLUE, BLUE, micro ? `${fresh}` : narrow ? `${fresh} done` : `${fresh} finished`)}
+                {busy > 0 && chip(`gw:${g.key}`, CHIP_GREEN, 'success', micro ? `${busy}` : narrow ? `${busy} busy` : `${busy} working`)}
+                {!narrow && <Box width={RC_W} flexShrink={0} />}
+                <Box width={narrow ? 3 : TIME_W} flexShrink={0} justifyContent="flex-end">
                   <Text size="caption" dimColor tabular>{String(g.items.length)}</Text>
                 </Box>
               </Box>

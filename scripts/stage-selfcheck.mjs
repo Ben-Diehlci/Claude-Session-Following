@@ -20,9 +20,12 @@ const expect = { quiet: 'quiet', working1: 'working', waiting: 'waiting', cheer:
 let bad = 0
 const fail = (n, m) => { bad++; console.log(`FAIL ${n}: ${m}`) }
 
-for (const [name, input] of Object.entries(cases)) {
-  const svg = stageSvg(input)
-  if (expect[name] && stageScene(input) !== expect[name]) fail(name, `scene ${stageScene(input)}`)
+// every scene at the full width and at narrow pane widths
+const runs = Object.entries(cases).flatMap(([n, i]) => [600, 280, 200].map(w => [`${n}@${w}`, i, w]))
+for (const [name, input, w] of runs) {
+  const svg = stageSvg(input, w)
+  const plain = name.split('@')[0]
+  if (expect[plain] && stageScene(input) !== expect[plain]) fail(name, `scene ${stageScene(input)}`)
   if (!svg.startsWith('<svg ') || !svg.endsWith('</svg>')) fail(name, 'not wrapped in <svg>')
   if (/NaN|undefined|Infinity|null/.test(svg)) fail(name, 'NaN/undefined in markup')
   if (svg.length > 131072) fail(name, 'over 131072 chars')
