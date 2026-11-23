@@ -1191,7 +1191,7 @@ export const register: Register = on => {
             <Box key={`g:${g.key}`} flexDirection="column" backgroundColor={GROUP_BG} paddingBottom={isCollapsed ? 0 : 1}>
               <Box flexDirection="row" gap={1} alignItems="center" backgroundColor={GROUP_HEAD_BG} paddingX={1} paddingY={1}>
                 <Button
-                  key={`fold:${g.key}`}
+                  key={`fold:${g.key}:${isCollapsed ? 'closed' : 'open'}`}
                   plain
                   label={isCollapsed ? '▸' : '▾'}
                   onPress={() => void update($, view, x => ({ ...x, collapsed: toggle(x.collapsed, g.key) }))}
@@ -1213,7 +1213,9 @@ export const register: Register = on => {
               {!isCollapsed && (extra > 0 || isExpanded) && (
                 <Box paddingLeft={3}>
                   <Button
-                    key={`more:${g.key}`}
+                    // the key changes with the state: a clicked button keeps the focus, and the
+                    // pane keeps a focused element in view, which pinned the scroll to it
+                    key={`more:${g.key}:${isExpanded ? 'less' : 'more'}`}
                     plain
                     dimColor
                     label={isExpanded ? 'Show less' : `Show ${extra} more`}
