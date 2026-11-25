@@ -511,8 +511,92 @@ async function toastOnce($: EngineInterface, s: Sess): Promise<void> {
   }
 }
 
+// ---- running flags: ~/.claude/session-following/running/<id>.json ----------------
+// Exact "working" state for the Session Tracker app: written when I send a prompt,
+// marked cleared when the turn ends or the session closes. Event-driven, no polling.
+async function writeRunning($: EngineInterface, on: boolean): Promise<void> {
+  try {
+    const id = await getSelfId($)
+    const dir = await baseDir($)
+    if (!id || !dir) return
+    const body = on ? { sessionId: id, since: new Date().toISOString(), cleared: false } : { sessionId: id, cleared: true }
+    await $.fs.write(`${dir}/running/${id}.json`, JSON.stringify(body))
+  } catch {
+    // best-effort, like the other flags
+  }
+}
+
+// ---- feed.json: usage limits, context % and Remote Control for the Session Tracker app ----
+// Only the Claude app's own tools know these. About once a minute ONE open session
+// refreshes the shared file: every session's timer checks writtenAt and skips when it
+// is under FEED_SKIP_MS old. Runs with the pane closed. Written via a .tmp file + rename.
+const FEED_EVERY_MS = 60000
+const FEED_SKIP_MS = 50000
+let feedTryAt = 0
+let feedBusy = false
+let feedUsage: { at: number; list: Usage[] } = { at: 0, list: [] }
+
+async function feedTick($: EngineInterface): Promise<void> {
+  const now = Date.now()
+  if (feedBusy || now - feedTryAt < FEED_EVERY_MS) return
+  feedBusy = true
+  feedTryAt = now
+  try {
+    const dir = await baseDir($)
+    if (!dir) return
+    const path = `${dir}/feed.json`
+    try {
+      const o = parseJson<Obj>(String(await $.fs.read(path)))
+      const t = o && typeof o.writtenAt === 'string' ? Date.parse(o.writtenAt) : NaN
+      if (!Number.isNaN(t) && now - t < FEED_SKIP_MS) return
+    } catch {
+      // no feed.json yet: write one
+    }
+    const rows = await listSessions($)
+    const selfRaw = await callJson<Obj & Raw>($, 'get_session', { session_id: 'self' })
+    const id = selfRaw && typeof selfRaw.sessionId === 'string' ? selfRaw.sessionId : await getSelfId($)
+    const usageSelf = await callJson<UsageRes>($, 'get_usage', { session_id: 'self' })
+    let usage = planUsage(usageSelf)
+    if (usage.length > 0) feedUsage = { at: now, list: usage }
+    else if (now - feedUsage.at < USAGE_KEEP_MS) usage = feedUsage.list
+    // The app sometimes refuses the reads (plan mode, "unavailable"): then leave the old file alone.
+    if (!id || (usage.length === 0 && !selfRaw)) return
+    const busy = await readBusy($)
+    const cutoff = now - RECENT_DAYS * 86400000
+    const sessions: Record<string, { remote: boolean; ctx?: number }> = {}
+    const working: string[] = []
+    for (const r of rows) {
+      if (!r.sessionId || r.sessionId === id) continue
+      const running = !!r.isRunning || busy.has(r.sessionId)
+      if (!running && !(Date.parse(r.lastActivityAt ?? '') >= cutoff)) continue
+      sessions[r.sessionId] = { remote: !!r.remoteControlActive }
+      if (running) working.push(r.sessionId)
+    }
+    sessions[id] = { remote: !!(selfRaw && selfRaw.remoteControlActive) }
+    const sc = ctxPercent(usageSelf)
+    if (sc !== null) sessions[id] = { ...sessions[id]!, ctx: sc }
+    for (let i = 0; i < working.length; i += 5) {
+      await Promise.all(
+        working.slice(i, i + 5).map(async sid => {
+          const c = ctxPercent(await callJson<UsageRes>($, 'get_usage', { session_id: sid }))
+          if (c !== null) sessions[sid] = { ...sessions[sid]!, ctx: c }
+        }),
+      )
+    }
+    const body = { writtenAt: new Date().toISOString(), writer: id, usage, sessions }
+    await $.fs.write(`${path}.tmp`, JSON.stringify(body))
+    const mv = await $.process.run(['/bin/mv', '-f', `${path}.tmp`, path])
+    void mv
+  } catch {
+    // best-effort; try again next minute
+  } finally {
+    feedBusy = false
+  }
+}
+
 async function tick($: EngineInterface): Promise<void> {
   void bgCheck($)
+  void feedTick($)
   if (Date.now() - lastPollAt < POLL_MS - 500) return
   await poll($)
 }
@@ -547,6 +631,7 @@ function folderName(cwd: string): string {
 // Optional settings in ~/.claude/session-following/settings.json, e.g. {"mainFolder": "Projects"}
 let mainFolder = ''
 let homeDir = ''
+let panelOn = true
 let settingsAt = 0
 async function loadSettings($: EngineInterface): Promise<void> {
   if (Date.now() - settingsAt < 60000) return
@@ -554,14 +639,18 @@ async function loadSettings($: EngineInterface): Promise<void> {
   homeDir = ((await $.env.get('HOME')) ?? '').replace(/\/+$/, '')
   const dir = await baseDir($)
   let mf = ''
+  let pn = true
   try {
     const r = dir ? await $.fs.read(`${dir}/settings.json`) : ''
     const o = parseJson<Obj>(typeof r === 'string' ? r : '')
     if (o && typeof o.mainFolder === 'string') mf = o.mainFolder.trim().replace(/^\/+|\/+$/g, '')
+    // "panel": false stops the pane opening by itself at session start (missing = true)
+    if (o && o.panel === false) pn = false
   } catch {
     // no settings file: use the parent-folder label
   }
   mainFolder = mf
+  panelOn = pn
 }
 
 // Caption under a project group's name. With mainFolder set and the project inside it:
@@ -730,7 +819,8 @@ function stableStage(input: StageInput, width: number): string {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'sessions', description: 'Open the Sessions pane' })
-    void $.ui.open({ id: PANE, title: 'Sessions' })
+    await loadSettings($)
+    if (panelOn) void $.ui.open({ id: PANE, title: 'Sessions' })
     void getSelfId($)
     void (async () => {
       const saved = await $.store.get('perGroup').catch(() => undefined)
@@ -751,6 +841,7 @@ export const register: Register = on => {
     ticker?.cancel()
     ticker = null
     await writeFlag($, null)
+    await writeRunning($, false)
     bgLast = { key: 'end', at: 0 }
     bgShells.clear()
     try {
@@ -830,6 +921,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    if (!e.agentId) void writeRunning($, false)
     if (!e.agentId && e.reason === 'answer') {
       const ask = wrapAsk
       wrapAsk = ''
@@ -861,6 +953,7 @@ export const register: Register = on => {
     }
     wrapAsk = ''
     activeWaits.clear()
+    void writeRunning($, true)
     // I replied here, so I've seen how it finished; the next turn end marks it again
     void getSelfId($).then(id => writeDone($, id, null))
     void writeFlag($, null)

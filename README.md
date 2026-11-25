@@ -175,6 +175,16 @@ If you keep all your projects under one main folder, you can make the caption sh
 
 Then `~/Projects/Work/team-site/app` shows `Work` rather than `team-site`, and projects directly inside `~/Projects` show no caption. Projects outside the main folder use the normal caption. The panel rereads this file about once a minute.
 
+### Panel setting (run it quietly)
+
+By default the Sessions pane opens by itself when a session starts. If you read the notes with another tool (for example a menu-bar app) and want the mod to work in the background only, add `"panel": false` to the same `settings.json`:
+
+```json
+{ "panel": false }
+```
+
+A new session then opens no pane. `/sessions` still opens it whenever you want it. A missing key means `true`, so nothing changes unless you set it. The file is reread about once a minute, so a new session picks the change up within that time.
+
 ---
 
 ## Examples
@@ -225,14 +235,16 @@ A session that is waiting on you counts under **need you**, not **working**, eve
 
 ## What it reads and writes
 
-- **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac. Also the optional `~/.claude/session-following/settings.json` ([Area label](#area-label)).
+- **Reads:** the desktop app's own session list, session details and usage limits. These come through the app's built-in tools, on your Mac. Also the optional `~/.claude/session-following/settings.json` ([Area label](#area-label), [Panel setting](#panel-setting-run-it-quietly)).
 - **Writes:**
   - `~/.claude/session-following/waiting/<session-id>.json`, the "needs you" notes (one small file per session)
   - `~/.claude/session-following/busy/<session-id>.json`, a note a session keeps while its helper agents or background commands still run after its own reply ended, so it shows as working ("1 background task")
   - `~/.claude/session-following/done/<session-id>.json`, the "finished" notes: when the turn ended, its last line, and whether you've seen it
+  - `~/.claude/session-following/running/<session-id>.json`, an exact "working" note: written when you send a prompt, marked `cleared` when the turn ends or the session closes
+  - `~/.claude/session-following/feed.json`, one shared file with the plan usage limits, each session's context % and whether Remote Control is on. About once a minute one open session refreshes it (the others see it is fresh and skip), even when the pane is closed. It is written to a temporary file first, then renamed, so a reader never sees half a file. These numbers come only from the Claude app's own tools
   - `~/.claude/session-following/toasted/`, so the "is done" pop-up appears only once
   - your **Show per project** choice, in the mod's own settings store
-- **Runs:** `/usr/bin/open claude://...` when you click a title.
+- **Runs:** `/usr/bin/open claude://...` when you click a title, and `/bin/mv` to rename the finished `feed.json` file into place.
 - **Never:** sends anything over the network, reads your chats, or changes your sessions.
 
 ---
